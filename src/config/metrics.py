@@ -95,8 +95,8 @@ LLM_TOKEN_USAGE = Counter(
     ["model", "provider", "type"]
 )
 
-LLM_ERROR_TOTAL = Counter(
-    "llm_error_total",
+LLM_ERRORS_TOTAL = Counter(
+    "LLM_ERRORS_TOTAL",
     "Total number of LLM API errors",
     ["model", "provider", "error_type"]
 )
@@ -248,7 +248,7 @@ def track_llm_response(model: str, provider: str, duration: float, prompt_tokens
     completion_counter.inc(completion_tokens)
 
 def track_llm_error(model: str, provider: str, error_type: str):
-    LLM_ERROR_TOTAL.labels(model=model, provider=provider, error_type=error_type).inc()
+    LLM_ERRORS_TOTAL.labels(model=model, provider=provider, error_type=error_type).inc()
     
 def track_llm_fallback(from_model: str, to_model: str):
     LLM_FALLBACKS_TOTAL.labels(from_model=from_model, to_model=to_model).inc()
