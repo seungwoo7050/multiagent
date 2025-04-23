@@ -80,23 +80,25 @@ async def get_http_session() -> aiohttp.ClientSession:
                 limit_per_host=10,
             )
             
+            # Default timeout if settings is None
+            request_timeout = 30.0
+            if settings is not None and hasattr(settings, "REQUEST_TIMEOUT"):
+                request_timeout = settings.REQUEST_TIMEOUT
+            
             timeout = aiohttp.ClientTimeout(
-                total=settings.REQUEST_TIMEOUT,
+                total=request_timeout,
                 connect=10.0,
                 sock_connect=10.0,
-                sock_read=settings.REQUEST_TIMEOUT,
+                sock_read=request_timeout,  # Use variable instead of direct settings access
             )
             
             _http_session_pool = aiohttp.ClientSession(
                 connector=connector,
                 timeout=timeout,
-                raise_for_status=True,
-                trust_env=True,
+                raise_for_status=True
             )
-            
-            logger.debug("Created new HTTP session pool")
-
-    return _http_session_pool
+        
+        return _http_session_pool
 
 class ConnectionManager:
     @staticmethod

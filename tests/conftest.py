@@ -40,3 +40,5 @@ def reset_global_state():
     except Exception as e:
         # Log but don't fail tests on cleanup errors
         logging.error(f"Error during cleanup: {e}")
+        
+        

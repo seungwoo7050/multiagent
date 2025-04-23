@@ -138,15 +138,15 @@ TOOL_EXECUTIONS_TOTAL = Counter(
     ["tool_name"]
 )
 
-TOOL_EXCUTION_DURATION = Histogram(
+TOOL_EXECUTION_DURATION = Histogram(
     "tool_execution_duration_seconds",
     "Tool execution duration in seconds",
     ["tool_name"],
     buckets=(0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, float("inf"))
 )
 
-TOOL_ERROR_TOTAL = Counter(
-    "tool_error_total",
+TOOL_ERRORS_TOTAL = Counter(
+    "TOOL_ERRORS_TOTAL",
     "Total number of tool errors",
     ["tool_name", "error_type"]
 )
@@ -265,14 +265,14 @@ def track_agent_operation_completed(agent_type: str, operation_type: str, durati
 def track_agent_error(agent_type: str, error_type: str):
     AGENT_ERROR_TOTAL.labels(agent_type=agent_type, error_type=error_type).inc()
     
-def track_tool_executions(tool_name: str):
+def track_tool_execution(tool_name: str):
     TOOL_EXECUTIONS_TOTAL.labels(tool_name=tool_name).inc()
     
 def track_tool_execution_completed(tool_name: str, duration: float):
-    TOOL_EXCUTION_DURATION.labels(tool_name=tool_name).observe(duration)
+    TOOL_EXECUTION_DURATION.labels(tool_name=tool_name).observe(duration)
     
 def track_tool_error(tool_name: str, error_type: str):
-    TOOL_ERROR_TOTAL.labels(tool_name=tool_name, error_type=error_type).inc()
+    TOOL_ERRORS_TOTAL.labels(tool_name=tool_name, error_type=error_type).inc()
     
 def track_memory_operation(operation_type: str):
     MEMORY_OPERATIONS_TOTAL.labels(operation_type=operation_type).inc()
