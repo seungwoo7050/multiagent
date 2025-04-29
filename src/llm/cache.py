@@ -1,514 +1,330 @@
-"""
-Caching system for LLM responses with Redis and in-memory cache.
-"""
-
 import abc
 import asyncio
 import json
 import time
-from typing import Any, Dict, Optional, Union, TypeVar, Generic
+from typing import Any, Dict, Optional, Union, TypeVar, Generic, List, Tuple
 import hashlib
 from functools import lru_cache
-
 from src.config.settings import get_settings
 from src.config.logger import get_logger
-from src.config.metrics import (
-    CACHE_OPERATIONS_TOTAL, 
-    CACHE_HITS_TOTAL,
-    CACHE_MISSES_TOTAL,
-    CACHE_SIZE,
-    track_cache_operation,
-    track_cache_hit,
-    track_cache_miss,
-    track_cache_size,
-    timed_metric,
-    MEMORY_OPERATION_DURATION
-)
+from src.config.metrics import CACHE_OPERATIONS_TOTAL, CACHE_HITS_TOTAL, CACHE_MISSES_TOTAL, CACHE_SIZE, track_cache_operation, track_cache_hit, track_cache_miss, track_cache_size, timed_metric, MEMORY_OPERATION_DURATION
 from src.config.errors import MemoryError, ErrorCode
-
-# Import functions from config module
 from src.config.connections import get_redis_async_connection
-
 settings = get_settings()
 logger = get_logger(__name__)
-
 T = TypeVar('T')
-
-# Singleton instance of the cache
 _CACHE_INSTANCE = None
 _CACHE_LOCK = asyncio.Lock()
 
-
 class LLMCache(abc.ABC, Generic[T]):
-    """Abstract base class for LLM response caching."""
-    
+
     @abc.abstractmethod
     async def get(self, key: str) -> Optional[T]:
-        """Get an item from the cache.
-        
-        Args:
-            key: Cache key
-            
-        Returns:
-            Optional[T]: Cached item or None if not found
-        """
         pass
-    
+
     @abc.abstractmethod
-    async def set(self, key: str, value: T, ttl: Optional[int] = None) -> bool:
-        """Set an item in the cache.
-        
-        Args:
-            key: Cache key
-            value: Value to cache
-            ttl: Time-to-live in seconds (optional)
-            
-        Returns:
-            bool: True if successful
-        """
+    async def set(self, key: str, value: T, ttl: Optional[int]=None) -> bool:
         pass
-    
+
     @abc.abstractmethod
     async def delete(self, key: str) -> bool:
-        """Delete an item from the cache.
-        
-        Args:
-            key: Cache key
-            
-        Returns:
-            bool: True if successful
-        """
         pass
-    
+
     @abc.abstractmethod
     async def clear(self) -> bool:
-        """Clear the entire cache.
-        
-        Returns:
-            bool: True if successful
-        """
         pass
-    
+
     @abc.abstractmethod
     async def get_stats(self) -> Dict[str, Any]:
-        """Get cache statistics.
-        
-        Returns:
-            Dict[str, Any]: Cache stats
-        """
         pass
 
-
 class TwoLevelCache(LLMCache[T]):
-    """Two-level cache with in-memory LRU and Redis backend."""
-    
-    def __init__(
-        self, 
-        namespace: str = "llm",
-        local_maxsize: int = 1000,
-        ttl: int = 3600,
-        serializer: Optional[callable] = None,
-        deserializer: Optional[callable] = None
-    ):
-        """Initialize the two-level cache.
-        
-        Args:
-            namespace: Cache namespace prefix for Redis keys
-            local_maxsize: Maximum size of the local LRU cache
-            ttl: Default time-to-live in seconds
-            serializer: Function to serialize values for Redis
-            deserializer: Function to deserialize values from Redis
-        """
+
+    def __init__(self, namespace: str='llm', local_maxsize: int=1000, ttl: int=3600, serializer: Optional[callable]=None, deserializer: Optional[callable]=None):
         self.namespace = namespace
         self.ttl = ttl
         self.local_maxsize = local_maxsize
-        
-        # Set default serializer/deserializer if not provided
         self.serializer = serializer or self._default_serializer
         self.deserializer = deserializer or self._default_deserializer
-        
-        # Initialize metrics
         self.hit_count = 0
         self.miss_count = 0
         self.set_count = 0
         self.delete_count = 0
-        
-        # Create in-memory LRU cache
-        # Note: We're using a simple dict here with manual LRU management
-        # for better async compatibility
         self.local_cache: Dict[str, Dict[str, Any]] = {}
-        self.local_cache_order: list = []  # For LRU tracking
-        
-        # Initialize Redis connection later (lazy initialization)
+        self.local_cache_order: list[str] = []
         self._redis = None
         self._initialized = False
-        
-        logger.debug(f"Initialized two-level cache with namespace '{namespace}'")
-    
+        logger.debug(f"Initialized two-level cache with namespace '{namespace}', L1 maxsize={local_maxsize}, default TTL={ttl}s")
+
     async def _ensure_initialized(self) -> bool:
-        """Ensure the cache is initialized.
-        
-        Returns:
-            bool: True if initialization was successful
-        """
         if self._initialized:
             return True
-        
         try:
-            # Import here to avoid circular imports
-            from src.config.connections import get_redis_async_connection
-            
-            # Get Redis connection from config# Get Redis connection
             self._redis = await get_redis_async_connection()
             self._initialized = True
+            logger.debug('Redis connection ensured for TwoLevelCache.')
             return True
         except Exception as e:
-            logger.error(f"Failed to initialize cache: {str(e)}")
+            logger.error(f'Failed to initialize Redis connection for cache: {str(e)}')
+            self._initialized = False
             return False
-    
+
     def _default_serializer(self, value: T) -> str:
-        """Default serializer for cache values.
-        
-        Args:
-            value: Value to serialize
-            
-        Returns:
-            str: Serialized value
-        """
-        return json.dumps(value)
-    
-    def _default_deserializer(self, serialized: str) -> T:
-        """Default deserializer for cache values.
-        
-        Args:
-            serialized: Serialized value
-            
-        Returns:
-            T: Deserialized value
-        """
-        return json.loads(serialized)
-    
+        try:
+            return json.dumps(value, default=str)
+        except TypeError as e:
+            logger.error(f'Default serialization failed: {e}. Value type: {type(value)}')
+            raise
+
+    def _default_deserializer(self, serialized: Union[str, bytes]) -> T:
+        try:
+            if isinstance(serialized, bytes):
+                serialized = serialized.decode('utf-8')
+            return json.loads(serialized)
+        except (json.JSONDecodeError, UnicodeDecodeError) as e:
+            logger.error(f'Default deserialization failed: {e}. Data: {serialized[:100]}...')
+            raise
+
     def _get_redis_key(self, key: str) -> str:
-        """Get the full Redis key with namespace.
-        
-        Args:
-            key: Cache key
-            
-        Returns:
-            str: Full Redis key
-        """
-        return f"{self.namespace}:{key}"
-    
+        return f'{self.namespace}:{key}'
+
     def _update_lru_order(self, key: str) -> None:
-        """Update the LRU order after a key access.
-        
-        Args:
-            key: Cache key
-        """
-        # Remove from current position (if exists)
         if key in self.local_cache_order:
             self.local_cache_order.remove(key)
-        
-        # Add to the end (most recently used)
         self.local_cache_order.append(key)
-        
-        # Trim cache if needed
         while len(self.local_cache_order) > self.local_maxsize:
-            oldest_key = self.local_cache_order.pop(0)  # Remove least recently used
+            oldest_key = self.local_cache_order.pop(0)
             self.local_cache.pop(oldest_key, None)
-    
-    @timed_metric(MEMORY_OPERATION_DURATION, {"operation_type": "cache_get"})
+            logger.debug(f'L1 cache evicted key: {oldest_key} (size exceeded {self.local_maxsize})')
+
+    @timed_metric(MEMORY_OPERATION_DURATION, {'operation_type': 'cache_get'})
     async def get(self, key: str) -> Optional[T]:
-        """Get an item from the cache.
-        
-        Args:
-            key: Cache key
-            
-        Returns:
-            Optional[T]: Cached item or None if not found
-        """
-        track_cache_operation("get")
-        
-        # Check local cache first (fastest)
+        track_cache_operation('get')
         if key in self.local_cache:
             entry = self.local_cache[key]
-            # Check if expired
-            if "expires_at" not in entry or entry["expires_at"] > time.time():
+            expires_at = entry.get('expires_at')
+            if expires_at is None or expires_at > time.time():
                 self._update_lru_order(key)
                 self.hit_count += 1
-                track_cache_hit("local")
-                return entry["value"]
+                track_cache_hit('local')
+                logger.debug(f'L1 cache hit for key: {key}')
+                return cast(T, entry['value'])
             else:
-                # Expired - remove from local cache
+                logger.debug(f'L1 cache expired for key: {key}')
                 self.local_cache.pop(key, None)
                 if key in self.local_cache_order:
                     self.local_cache_order.remove(key)
-        
-        # Ensure initialized
         initialized = await self._ensure_initialized()
-        if not initialized:
+        if not initialized or self._redis is None:
             self.miss_count += 1
-            track_cache_miss("local")
+            track_cache_miss('local')
+            logger.warning(f"Cannot check L2 cache for key '{key}': Redis not initialized.")
             return None
-        
-        # Check Redis
         try:
             redis_key = self._get_redis_key(key)
+            start_time = time.time()
             serialized = await self._redis.get(redis_key)
-            
-            if serialized:
-                # Cache hit in Redis
-                value = self.deserializer(serialized)
-                
-                # Get TTL to pass to local cache
-                ttl = await self._redis.ttl(redis_key)
-                expires_at = time.time() + ttl if ttl > 0 else None
-                
-                # Store in local cache
-                self.local_cache[key] = {
-                    "value": value,
-                    "expires_at": expires_at
-                }
+            track_memory_operation_completed('redis_get_cache', time.time() - start_time)
+            if serialized is not None:
+                value: T = self.deserializer(serialized)
+                redis_ttl = await self._redis.ttl(redis_key)
+                l1_expires_at: Optional[float] = None
+                if redis_ttl > 0:
+                    l1_expires_at = time.time() + redis_ttl
+                elif redis_ttl == -1:
+                    l1_expires_at = None
+                self.local_cache[key] = {'value': value, 'expires_at': l1_expires_at}
                 self._update_lru_order(key)
-                
+                track_cache_size('local', len(self.local_cache))
                 self.hit_count += 1
-                track_cache_hit("redis")
+                track_cache_hit('redis')
+                logger.debug(f'L2 cache hit for key: {key}. Stored in L1.')
                 return value
             else:
-                # Not found in Redis either
                 self.miss_count += 1
-                track_cache_miss("redis")
+                track_cache_miss('redis')
+                logger.debug(f'Cache miss for key: {key} (not found in L1 or L2).')
                 return None
-                
         except Exception as e:
-            logger.warning(f"Error retrieving from Redis cache: {str(e)}")
+            logger.warning(f"Error retrieving key '{key}' from Redis cache: {str(e)}", exc_info=True)
             self.miss_count += 1
-            track_cache_miss("redis_error")
+            track_cache_miss('redis_error')
             return None
-    
-    @timed_metric(MEMORY_OPERATION_DURATION, {"operation_type": "cache_set"})
-    async def set(self, key: str, value: T, ttl: Optional[int] = None) -> bool:
-        """Set an item in the cache.
-        
-        Args:
-            key: Cache key
-            value: Value to cache
-            ttl: Time-to-live in seconds (optional)
-            
-        Returns:
-            bool: True if successful
-        """
-        track_cache_operation("set")
-        
-        # Use default TTL if not specified
-        ttl = ttl if ttl is not None else self.ttl
-        
-        # Store in local cache
-        expires_at = time.time() + ttl if ttl > 0 else None
-        self.local_cache[key] = {
-            "value": value,
-            "expires_at": expires_at
-        }
+
+    @timed_metric(MEMORY_OPERATION_DURATION, {'operation_type': 'cache_set'})
+    async def set(self, key: str, value: T, ttl: Optional[int]=None) -> bool:
+        track_cache_operation('set')
+        effective_ttl = ttl if ttl is not None else self.ttl
+        l1_expires_at: Optional[float] = None
+        if effective_ttl > 0:
+            l1_expires_at = time.time() + effective_ttl
+        self.local_cache[key] = {'value': value, 'expires_at': l1_expires_at}
         self._update_lru_order(key)
-        
-        # Ensure initialized
+        track_cache_size('local', len(self.local_cache))
         initialized = await self._ensure_initialized()
-        if not initialized:
-            return False
-        
-        # Store in Redis
+        if not initialized or self._redis is None:
+            logger.warning(f"Cannot save key '{key}' to L2 cache: Redis not initialized.")
+            return True
         try:
             redis_key = self._get_redis_key(key)
             serialized = self.serializer(value)
-            
-            if ttl > 0:
-                await self._redis.setex(redis_key, ttl, serialized)
+            start_time = time.time()
+            if effective_ttl > 0:
+                await self._redis.setex(redis_key, effective_ttl, serialized)
             else:
                 await self._redis.set(redis_key, serialized)
-            
+            track_memory_operation_completed('redis_set_cache', time.time() - start_time)
             self.set_count += 1
-            track_cache_size("local", len(self.local_cache))
-            
+            logger.debug(f"Set key '{key}' in L1 and L2 cache. TTL: {effective_ttl}s.")
             return True
         except Exception as e:
-            logger.warning(f"Error storing in Redis cache: {str(e)}")
+            logger.warning(f"Error storing key '{key}' in Redis cache: {str(e)}", exc_info=True)
             return False
-    
-    @timed_metric(MEMORY_OPERATION_DURATION, {"operation_type": "cache_delete"})
+
+    @timed_metric(MEMORY_OPERATION_DURATION, {'operation_type': 'cache_delete'})
     async def delete(self, key: str) -> bool:
-        """Delete an item from the cache.
-        
-        Args:
-            key: Cache key
-            
-        Returns:
-            bool: True if successful
-        """
-        track_cache_operation("delete")
-        
-        # Remove from local cache
-        self.local_cache.pop(key, None)
-        if key in self.local_cache_order:
-            self.local_cache_order.remove(key)
-        
-        # Ensure initialized
+        track_cache_operation('delete')
+        deleted_from_l1 = False
+        if key in self.local_cache:
+            self.local_cache.pop(key, None)
+            if key in self.local_cache_order:
+                self.local_cache_order.remove(key)
+            deleted_from_l1 = True
+            track_cache_size('local', len(self.local_cache))
+            logger.debug(f"Deleted key '{key}' from L1 cache.")
         initialized = await self._ensure_initialized()
-        if not initialized:
+        if not initialized or self._redis is None:
+            logger.warning(f"Cannot delete key '{key}' from L2 cache: Redis not initialized.")
             return False
-        
-        # Remove from Redis
         try:
             redis_key = self._get_redis_key(key)
-            await self._redis.delete(redis_key)
-            
+            start_time = time.time()
+            deleted_count = await self._redis.delete(redis_key)
+            track_memory_operation_completed('redis_delete_cache', time.time() - start_time)
             self.delete_count += 1
-            return True
+            deleted_from_l2 = deleted_count > 0
+            if deleted_from_l2:
+                logger.debug(f"Deleted key '{redis_key}' from L2 cache.")
+            elif not deleted_from_l1:
+                logger.debug(f"Key '{key}' not found in L1 or L2 cache for deletion.")
+            return deleted_from_l2
         except Exception as e:
-            logger.warning(f"Error deleting from Redis cache: {str(e)}")
+            logger.warning(f"Error deleting key '{key}' from Redis cache: {str(e)}", exc_info=True)
             return False
-    
-    @timed_metric(MEMORY_OPERATION_DURATION, {"operation_type": "cache_clear"})
+
+    @timed_metric(MEMORY_OPERATION_DURATION, {'operation_type': 'cache_clear'})
     async def clear(self) -> bool:
-        """Clear the entire cache.
-        
-        Returns:
-            bool: True if successful
-        """
-        track_cache_operation("clear")
-        
-        # Clear local cache
+        track_cache_operation('clear')
+        l1_cleared_count = len(self.local_cache)
         self.local_cache.clear()
         self.local_cache_order.clear()
-        
-        # Ensure initialized
+        track_cache_size('local', 0)
+        logger.info(f'Cleared L1 cache ({l1_cleared_count} items).')
         initialized = await self._ensure_initialized()
-        if not initialized:
+        if not initialized or self._redis is None:
+            logger.error('Cannot clear L2 cache: Redis not initialized.')
             return False
-        
-        # Clear Redis keys in this namespace
         try:
-            # Get all keys in this namespace
-            pattern = f"{self.namespace}:*"
-            cursor = "0"
+            pattern = f'{self.namespace}:*'
+            logger.info(f'Clearing L2 cache keys matching pattern: {pattern}')
+            cursor = '0'
             deleted_count = 0
-            
-            while cursor != 0:
-                cursor, keys = await self._redis.scan(cursor=cursor, match=pattern, count=100)
-                
+            start_time = time.time()
+            while True:
+                cursor, keys = await self._redis.scan(cursor=cursor, match=pattern, count=1000)
                 if keys:
-                    await self._redis.delete(*keys)
-                    deleted_count += len(keys)
-                
-                # Convert cursor to int and check if we're done
-                cursor = int(cursor)
-                if cursor == 0:
+                    num_deleted = await self._redis.delete(*keys)
+                    deleted_count += num_deleted
+                    logger.debug(f'Deleted {num_deleted} keys from Redis in current scan iteration.')
+                if cursor == b'0':
                     break
-            
-            logger.debug(f"Cleared {deleted_count} keys from Redis cache namespace '{self.namespace}'")
+                try:
+                    if int(cursor) == 0:
+                        break
+                except ValueError:
+                    logger.error(f'Unexpected cursor value from Redis SCAN: {cursor}')
+                    break
+            track_memory_operation_completed('redis_clear_namespace', time.time() - start_time)
+            logger.info(f"Cleared {deleted_count} keys from Redis cache namespace '{self.namespace}'.")
             return True
         except Exception as e:
-            logger.warning(f"Error clearing Redis cache: {str(e)}")
+            logger.error(f"Error clearing Redis cache namespace '{self.namespace}': {str(e)}", exc_info=True)
             return False
-    
+
     async def get_stats(self) -> Dict[str, Any]:
-        """Get cache statistics.
-        
-        Returns:
-            Dict[str, Any]: Cache stats
-        """
-        stats = {
-            "namespace": self.namespace,
-            "local_cache_size": len(self.local_cache),
-            "local_cache_maxsize": self.local_maxsize,
-            "hit_count": self.hit_count,
-            "miss_count": self.miss_count,
-            "set_count": self.set_count,
-            "delete_count": self.delete_count,
-            "hit_ratio": self.hit_count / (self.hit_count + self.miss_count) if (self.hit_count + self.miss_count) > 0 else 0
-        }
-        
-        # Add Redis stats if available
-        if self._initialized:
+        stats = {'cache_type': 'TwoLevelCache', 'namespace': self.namespace, 'local_cache_size': len(self.local_cache), 'local_cache_maxsize': self.local_maxsize, 'hit_count': self.hit_count, 'miss_count': self.miss_count, 'set_count': self.set_count, 'delete_count': self.delete_count, 'hit_ratio': self.hit_count / (self.hit_count + self.miss_count) if self.hit_count + self.miss_count > 0 else 0.0}
+        if self._initialized and self._redis is not None:
             try:
-                # Get Redis memory usage
                 redis_key_count = 0
-                pattern = f"{self.namespace}:*"
-                cursor = "0"
-                
-                while cursor != 0:
-                    cursor, keys = await self._redis.scan(cursor=cursor, match=pattern, count=100)
+                pattern = f'{self.namespace}:*'
+                cursor = '0'
+                start_time = time.time()
+                while True:
+                    cursor, keys = await self._redis.scan(cursor=cursor, match=pattern, count=5000)
                     redis_key_count += len(keys)
-                    
-                    # Convert cursor to int and check if we're done
-                    cursor = int(cursor)
-                    if cursor == 0:
+                    if cursor == b'0' or int(cursor) == 0:
                         break
-                
-                stats["redis_key_count"] = redis_key_count
+                track_memory_operation_completed('redis_scan_stats', time.time() - start_time)
+                stats['redis_key_count_in_namespace'] = redis_key_count
+                stats['redis_connected'] = True
             except Exception as e:
-                logger.warning(f"Error getting Redis stats: {str(e)}")
-        
+                logger.warning(f'Could not get Redis stats: {str(e)}')
+                stats['redis_connected'] = False
+                stats['redis_error'] = str(e)
+        else:
+            stats['redis_connected'] = False
         return stats
 
-
 async def get_cache() -> LLMCache:
-    """Get the global cache instance.
-    
-    Returns:
-        LLMCache: Cache instance
-    """
     global _CACHE_INSTANCE, _CACHE_LOCK
-    
     if _CACHE_INSTANCE is not None:
-        return _CACHE_INSTANCE
-    
-    # Use lock to prevent race conditions in initialization
-    async with _CACHE_LOCK:
-        # Double-check pattern
-        if _CACHE_INSTANCE is not None:
+        if hasattr(_CACHE_INSTANCE, '_initialized') and getattr(_CACHE_INSTANCE, '_initialized', False):
             return _CACHE_INSTANCE
-        
-        # Create new cache
-        _CACHE_INSTANCE = TwoLevelCache(
-            namespace="llm_cache",
-            local_maxsize=5000,  # Large local cache for frequently-used prompts
-            ttl=settings.CACHE_TTL
-        )
-        
-        logger.info("Initialized LLM cache")
-        return _CACHE_INSTANCE
-
+        else:
+            logger.debug('Cache instance exists but not initialized. Ensuring initialization.')
+            await _CACHE_INSTANCE._ensure_initialized()
+            return _CACHE_INSTANCE
+    async with _CACHE_LOCK:
+        if _CACHE_INSTANCE is not None:
+            if hasattr(_CACHE_INSTANCE, '_initialized') and getattr(_CACHE_INSTANCE, '_initialized', False):
+                return _CACHE_INSTANCE
+            else:
+                await _CACHE_INSTANCE._ensure_initialized()
+                return _CACHE_INSTANCE
+        logger.info('Creating and initializing the global LLM cache instance...')
+        try:
+            _CACHE_INSTANCE = TwoLevelCache(namespace=settings.APP_NAME.lower() + '_llm_cache', local_maxsize=5000, ttl=settings.CACHE_TTL)
+            initialized = await _CACHE_INSTANCE._ensure_initialized()
+            if initialized:
+                logger.info('Global LLM cache initialized successfully.')
+            else:
+                logger.error('Failed to initialize the global LLM cache (Redis connection issue?).')
+            return _CACHE_INSTANCE
+        except Exception as e:
+            logger.exception(f'Critical error creating global LLM cache instance: {e}')
+            _CACHE_INSTANCE = None
+            raise MemoryError(code=ErrorCode.INITIALIZATION_ERROR, message='Failed to create LLM Cache', original_error=e)
 
 async def clear_cache() -> bool:
-    """Clear the LLM response cache.
-    
-    Returns:
-        bool: True if successful
-    """
-    cache = await get_cache()
-    return await cache.clear()
+    try:
+        cache = await get_cache()
+        return await cache.clear()
+    except Exception as e:
+        logger.error(f'Failed to clear global cache: {e}', exc_info=True)
+        return False
 
-
-async def cache_result(key: str, value: Any, ttl: Optional[int] = None) -> bool:
-    """Cache an LLM result.
-    
-    Args:
-        key: Cache key
-        value: Result to cache
-        ttl: Time-to-live in seconds (optional)
-        
-    Returns:
-        bool: True if successful
-    """
-    cache = await get_cache()
-    return await cache.set(key, value, ttl)
-
+async def cache_result(key: str, value: Any, ttl: Optional[int]=None) -> bool:
+    try:
+        cache = await get_cache()
+        return await cache.set(key, value, ttl)
+    except Exception as e:
+        logger.error(f"Failed to cache result for key '{key}': {e}", exc_info=True)
+        return False
 
 async def get_cache_stats() -> Dict[str, Any]:
-    """Get cache statistics.
-    
-    Returns:
-        Dict[str, Any]: Cache stats
-    """
-    cache = await get_cache()
-    return await cache.get_stats()
+    try:
+        cache = await get_cache()
+        return await cache.get_stats()
+    except Exception as e:
+        logger.error(f'Failed to get cache stats: {e}', exc_info=True)
+        return {'error': f'Failed to get cache stats: {str(e)}'}

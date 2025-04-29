@@ -1,534 +1,341 @@
-"""Redis-based memory implementation with optimized access patterns."""
-
 import asyncio
 import time
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
-
 from src.config.connections import get_redis_async_connection
 from src.config.errors import ErrorCode, MemoryError, convert_exception
 from src.config.logger import get_logger
-from src.config.metrics import (
-    MEMORY_OPERATION_DURATION,
-    timed_metric,
-    track_cache_miss,
-    track_memory_operation,
-    track_memory_operation_completed,
-    track_memory_size,
-)
+from src.config.metrics import MEMORY_OPERATION_DURATION, timed_metric, track_cache_miss, track_memory_operation, track_memory_operation_completed, track_memory_size
 from src.config.settings import get_settings
 from src.memory.base import BaseMemory
-from src.memory.utils import (
-    AsyncLock,
-    ExpirationPolicy,
-    deserialize_data,
-    generate_memory_key,
-    serialize_data,
-)
+from src.memory.utils import AsyncLock, ExpirationPolicy, deserialize_data, generate_memory_key, serialize_data
 from src.utils.timing import async_timed
-
 logger = get_logger(__name__)
 settings = get_settings()
 
-
 class RedisMemory(BaseMemory):
-    """High-performance Redis-based memory implementation.
-    
-    Features:
-    - Connection pooling
-    - Async operations
-    - Batched reads/writes
-    - Efficient serialization
-    - Memory segmentation by context ID
-    """
-    
-    def __init__(self, default_ttl: Optional[int] = None):
-        """Initialize Redis memory.
-        
-        Args:
-            default_ttl: Default time-to-live for keys in seconds
-        """
-        self.default_ttl = default_ttl or settings.MEMORY_TTL
-        self._redis = None  # Lazy initialization
-    
-    async def _get_redis(self):
-        """Get or create Redis connection."""
+
+    def __init__(self, default_ttl: Optional[int]=None):
+        self.default_ttl: int = default_ttl if default_ttl is not None else settings.MEMORY_TTL
+        self._redis: Optional[Any] = None
+        logger.debug(f'RedisMemory initialized with default TTL: {self.default_ttl}s')
+
+    async def _get_redis(self) -> Any:
         if self._redis is None:
-            self._redis = await get_redis_async_connection()
+            logger.debug('Initializing Redis connection for RedisMemory...')
+            try:
+                self._redis = await get_redis_async_connection()
+                logger.debug('Redis connection successfully obtained.')
+            except Exception as e:
+                raise ConnectionError(code=ErrorCode.REDIS_CONNECTION_ERROR, message=f'Failed to get Redis connection: {str(e)}', original_error=e) from e
         return self._redis
-    
-    @timed_metric(MEMORY_OPERATION_DURATION, {"operation_type": "load_context"})
-    async def load_context(
-        self, 
-        key: str, 
-        context_id: str, 
-        default: Any = None
-    ) -> Any:
-        """Load data from Redis.
-        
-        Args:
-            key: The key to load
-            context_id: The conversation or session ID
-            default: Default value if key not found
-            
-        Returns:
-            The stored data or default if not found
-        """
-        track_memory_operation("load")
-        
+
+    @timed_metric(MEMORY_OPERATION_DURATION, {'operation_type': 'load_context'})
+    async def load_context(self, key: str, context_id: str, default: Any=None) -> Any:
+        track_memory_operation('load')
+        full_key = generate_memory_key(key, context_id)
+        logger.debug(f"Loading context for key: '{key}' (Redis key: '{full_key}')")
         try:
             redis = await self._get_redis()
-            full_key = generate_memory_key(key, context_id)
-            
-            # Get data from Redis
-            start_time = time.time()
-            data = await redis.get(full_key)
-            track_memory_operation_completed("redis_get", time.time() - start_time)
-            
+            start_time = time.monotonic()
+            data: Optional[bytes] = await redis.get(full_key)
+            track_memory_operation_completed('redis_get', time.monotonic() - start_time)
             if data is None:
-                track_cache_miss("redis_memory")
+                logger.debug(f"Key '{full_key}' not found in Redis. Returning default.")
+                track_cache_miss('redis_memory')
                 return default
-            
-            # Deserialize the data
-            return await deserialize_data(data, default)
-            
+            logger.debug(f"Key '{full_key}' found in Redis. Deserializing {len(data)} bytes.")
+            deserialized_data = await deserialize_data(data, default)
+            return deserialized_data
         except Exception as e:
-            error = convert_exception(
-                e, 
-                ErrorCode.MEMORY_RETRIEVAL_ERROR,
-                f"Failed to load context for key {key} in context {context_id}"
-            )
+            error = convert_exception(e, ErrorCode.MEMORY_RETRIEVAL_ERROR, f"Failed to load context for key '{key}' in context '{context_id}'")
             error.log_error(logger)
             return default
-    
-    @timed_metric(MEMORY_OPERATION_DURATION, {"operation_type": "save_context"})
-    async def save_context(
-        self, 
-        key: str, 
-        context_id: str, 
-        data: Any, 
-        ttl: Optional[int] = None
-    ) -> bool:
-        """Save data to Redis.
-        
-        Args:
-            key: The key to save under
-            context_id: The conversation or session ID
-            data: The data to save
-            ttl: Time-to-live in seconds
-            
-        Returns:
-            True if successful, False otherwise
-        """
-        track_memory_operation("save")
-        
+
+    @timed_metric(MEMORY_OPERATION_DURATION, {'operation_type': 'save_context'})
+    async def save_context(self, key: str, context_id: str, data: Any, ttl: Optional[int]=None) -> bool:
+        track_memory_operation('save')
+        full_key = generate_memory_key(key, context_id)
+        logger.debug(f"Saving context for key: '{key}' (Redis key: '{full_key}') with TTL: {ttl}")
         try:
             redis = await self._get_redis()
-            full_key = generate_memory_key(key, context_id)
-            
-            # Serialize the data
-            serialized_data = await serialize_data(data)
-            
-            # Determine TTL
+            serialized_data: bytes = await serialize_data(data)
+            data_size_bytes = len(serialized_data)
+            logger.debug(f"Serialized data size: {data_size_bytes} bytes for key '{full_key}'")
             effective_ttl = ExpirationPolicy.get_ttl(self.default_ttl, ttl)
-            
-            # Save to Redis
-            start_time = time.time()
-            if effective_ttl is not None:
+            start_time = time.monotonic()
+            success: bool = False
+            if effective_ttl is not None and effective_ttl > 0:
                 success = await redis.setex(full_key, effective_ttl, serialized_data)
+                logger.debug(f"Saved key '{full_key}' with TTL {effective_ttl}s")
             else:
                 success = await redis.set(full_key, serialized_data)
-            track_memory_operation_completed("redis_set", time.time() - start_time)
-            
-            # Track memory size
+                logger.debug(f"Saved key '{full_key}' without TTL")
+            track_memory_operation_completed('redis_set', time.monotonic() - start_time)
             if success:
-                size = len(serialized_data)
-                track_memory_size("redis", size)
-            
+                track_memory_size('redis', data_size_bytes)
             return bool(success)
-            
         except Exception as e:
-            error = convert_exception(
-                e, 
-                ErrorCode.MEMORY_STORAGE_ERROR,
-                f"Failed to save context for key {key} in context {context_id}"
-            )
+            error = convert_exception(e, ErrorCode.MEMORY_STORAGE_ERROR, f"Failed to save context for key '{key}' in context '{context_id}'")
             error.log_error(logger)
             return False
-    
-    @timed_metric(MEMORY_OPERATION_DURATION, {"operation_type": "delete_context"})
-    async def delete_context(
-        self, 
-        key: str, 
-        context_id: str
-    ) -> bool:
-        """Delete data from Redis.
-        
-        Args:
-            key: The key to delete
-            context_id: The conversation or session ID
-            
-        Returns:
-            True if successful, False otherwise
-        """
-        track_memory_operation("delete")
-        
+
+    @timed_metric(MEMORY_OPERATION_DURATION, {'operation_type': 'delete_context'})
+    async def delete_context(self, key: str, context_id: str) -> bool:
+        track_memory_operation('delete')
+        full_key = generate_memory_key(key, context_id)
+        logger.debug(f"Deleting context for key: '{key}' (Redis key: '{full_key}')")
         try:
             redis = await self._get_redis()
-            full_key = generate_memory_key(key, context_id)
-            
-            # Delete from Redis
-            start_time = time.time()
-            result = await redis.delete(full_key)
-            track_memory_operation_completed("redis_delete", time.time() - start_time)
-            
-            return result > 0
-            
-        except Exception as e:
-            error = convert_exception(
-                e, 
-                ErrorCode.MEMORY_STORAGE_ERROR,
-                f"Failed to delete context for key {key} in context {context_id}"
-            )
-            error.log_error(logger)
-            return False
-    
-    @timed_metric(MEMORY_OPERATION_DURATION, {"operation_type": "clear"})
-    async def clear(
-        self, 
-        context_id: Optional[str] = None
-    ) -> bool:
-        """Clear all data for a context or all contexts.
-        
-        Args:
-            context_id: The context to clear, or None for all
-            
-        Returns:
-            True if successful, False otherwise
-        """
-        track_memory_operation("clear")
-        
-        try:
-            redis = await self._get_redis()
-            
-            # Create pattern to match keys to delete
-            if context_id:
-                pattern = f"memory:{context_id}:*"
+            start_time = time.monotonic()
+            result: int = await redis.delete(full_key)
+            track_memory_operation_completed('redis_delete', time.monotonic() - start_time)
+            deleted = result > 0
+            if deleted:
+                logger.debug(f"Successfully deleted key '{full_key}'.")
             else:
-                pattern = "memory:*"
-            
-            # Use scan to find keys to delete (safer than KEYS)
-            cursor = 0
+                logger.debug(f"Key '{full_key}' not found for deletion.")
+            return deleted
+        except Exception as e:
+            error = convert_exception(e, ErrorCode.MEMORY_STORAGE_ERROR, f"Failed to delete context for key '{key}' in context '{context_id}'")
+            error.log_error(logger)
+            return False
+
+    @timed_metric(MEMORY_OPERATION_DURATION, {'operation_type': 'clear'})
+    async def clear(self, context_id: Optional[str]=None) -> bool:
+        track_memory_operation('clear')
+        operation_desc = f"context '{context_id}'" if context_id else 'all contexts'
+        logger.info(f'Clearing Redis memory for {operation_desc}...')
+        try:
+            redis = await self._get_redis()
+            if context_id:
+                pattern = f'memory:{context_id}:*'
+            else:
+                pattern = 'memory:*'
+            cursor: Union[bytes, int] = b'0'
             deleted_count = 0
-            
-            start_time = time.time()
+            total_scan_time = 0.0
+            total_delete_time = 0.0
             while True:
-                cursor, keys = await redis.scan(cursor, match=pattern, count=100)
-                
-                if keys:
-                    # Delete keys in batches
-                    result = await redis.delete(*keys)
+                scan_start = time.monotonic()
+                next_cursor_bytes: bytes
+                keys_bytes: List[bytes]
+                current_cursor_int = 0
+                try:
+                    if isinstance(cursor, bytes):
+                        current_cursor_int = int(cursor.decode())
+                    elif isinstance(cursor, int):
+                        current_cursor_int = cursor
+                except ValueError:
+                    pass
+                next_cursor_bytes, keys_bytes = await redis.scan(cursor=current_cursor_int, match=pattern, count=1000)
+                total_scan_time += time.monotonic() - scan_start
+                if keys_bytes:
+                    delete_start = time.monotonic()
+                    result = await redis.delete(*keys_bytes)
+                    total_delete_time += time.monotonic() - delete_start
                     deleted_count += result
-                
-                # Exit when scan is complete
-                if cursor == 0:
+                    logger.debug(f'Deleted {result} keys in batch.')
+                cursor = next_cursor_bytes
+                try:
+                    if isinstance(cursor, bytes) and cursor == b'0':
+                        break
+                    if isinstance(cursor, int) and cursor == 0:
+                        break
+                except ValueError:
+                    logger.error(f'Invalid cursor type from SCAN: {type(cursor)}')
                     break
-            
-            track_memory_operation_completed("redis_clear", time.time() - start_time)
+            track_memory_operation_completed('redis_clear', total_scan_time + total_delete_time)
+            logger.info(f'Finished clearing Redis memory for {operation_desc}. Deleted {deleted_count} keys. Scan took {total_scan_time:.4f}s, Delete took {total_delete_time:.4f}s.')
             return True
-            
         except Exception as e:
-            error = convert_exception(
-                e, 
-                ErrorCode.MEMORY_STORAGE_ERROR,
-                f"Failed to clear context {context_id or 'all'}"
-            )
+            error = convert_exception(e, ErrorCode.MEMORY_STORAGE_ERROR, f'Failed to clear context {context_id or 'all'}')
             error.log_error(logger)
             return False
-    
-    @timed_metric(MEMORY_OPERATION_DURATION, {"operation_type": "list_keys"})
-    async def list_keys(
-        self, 
-        context_id: Optional[str] = None, 
-        pattern: Optional[str] = None
-    ) -> List[str]:
-        """List all keys in memory.
-        
-        Args:
-            context_id: Filter by this context
-            pattern: Additional pattern filter
-            
-        Returns:
-            List of keys
-        """
-        track_memory_operation("list_keys")
-        
+
+    @timed_metric(MEMORY_OPERATION_DURATION, {'operation_type': 'list_keys'})
+    async def list_keys(self, context_id: Optional[str]=None, pattern: Optional[str]=None) -> List[str]:
+        track_memory_operation('list_keys')
+        operation_desc = f"context '{context_id}'" if context_id else 'all contexts'
+        pattern_desc = f" with pattern '{pattern}'" if pattern else ''
+        logger.debug(f'Listing keys for {operation_desc}{pattern_desc}')
         try:
             redis = await self._get_redis()
-            
-            # Create pattern to match keys
             if context_id:
-                base_pattern = f"memory:{context_id}:"
+                base_pattern = f'memory:{context_id}:'
             else:
-                base_pattern = "memory:*:"
-                
-            if pattern:
-                search_pattern = f"{base_pattern}{pattern}"
-            else:
-                search_pattern = f"{base_pattern}*"
-            
-            # Use scan to find keys
-            cursor = 0
-            all_keys = []
-            
-            start_time = time.time()
+                base_pattern = 'memory:*:'
+            search_pattern = f'{base_pattern}{pattern or '*'}'
+            logger.debug(f'Using Redis SCAN pattern: {search_pattern}')
+            cursor: Union[bytes, int] = b'0'
+            all_keys: List[str] = []
+            start_time = time.monotonic()
             while True:
-                cursor, keys = await redis.scan(cursor, match=search_pattern, count=100)
-                
-                # Extract the actual key names (remove prefix)
-                for full_key in keys:
-                    parts = full_key.split(":", 2)
-                    if len(parts) == 3:  # memory:context_id:key
+                current_cursor_int = 0
+                try:
+                    if isinstance(cursor, bytes):
+                        current_cursor_int = int(cursor.decode())
+                    elif isinstance(cursor, int):
+                        current_cursor_int = cursor
+                except ValueError:
+                    pass
+                next_cursor_bytes, keys_bytes = await redis.scan(cursor=current_cursor_int, match=search_pattern, count=1000)
+                for full_key_bytes in keys_bytes:
+                    full_key_str = full_key_bytes.decode('utf-8')
+                    parts = full_key_str.split(':', 2)
+                    if len(parts) == 3:
                         all_keys.append(parts[2])
-                
-                # Exit when scan is complete
-                if cursor == 0:
+                    else:
+                        logger.warning(f'Found key with unexpected format during list_keys: {full_key_str}')
+                cursor = next_cursor_bytes
+                try:
+                    if isinstance(cursor, bytes) and cursor == b'0':
+                        break
+                    if isinstance(cursor, int) and cursor == 0:
+                        break
+                except ValueError:
                     break
-            
-            track_memory_operation_completed("redis_list_keys", time.time() - start_time)
+            track_memory_operation_completed('redis_list_keys', time.monotonic() - start_time)
+            logger.debug(f'Found {len(all_keys)} matching keys for {operation_desc}{pattern_desc}.')
             return all_keys
-            
         except Exception as e:
-            error = convert_exception(
-                e, 
-                ErrorCode.MEMORY_RETRIEVAL_ERROR,
-                f"Failed to list keys for context {context_id or 'all'}"
-            )
+            error = convert_exception(e, ErrorCode.MEMORY_RETRIEVAL_ERROR, f'Failed to list keys for context {context_id or 'all'}')
             error.log_error(logger)
             return []
-    
-    @timed_metric(MEMORY_OPERATION_DURATION, {"operation_type": "exists"})
-    async def exists(
-        self, 
-        key: str, 
-        context_id: str
-    ) -> bool:
-        """Check if a key exists.
-        
-        Args:
-            key: The key to check
-            context_id: The conversation or session ID
-            
-        Returns:
-            True if key exists, False otherwise
-        """
-        track_memory_operation("exists")
-        
+
+    @timed_metric(MEMORY_OPERATION_DURATION, {'operation_type': 'exists'})
+    async def exists(self, key: str, context_id: str) -> bool:
+        track_memory_operation('exists')
+        full_key = generate_memory_key(key, context_id)
+        logger.debug(f"Checking existence for key: '{key}' (Redis key: '{full_key}')")
         try:
             redis = await self._get_redis()
-            full_key = generate_memory_key(key, context_id)
-            
-            # Check if key exists
-            start_time = time.time()
-            result = await redis.exists(full_key)
-            track_memory_operation_completed("redis_exists", time.time() - start_time)
-            
-            return result > 0
-            
+            start_time = time.monotonic()
+            result: int = await redis.exists(full_key)
+            track_memory_operation_completed('redis_exists', time.monotonic() - start_time)
+            key_exists = result > 0
+            logger.debug(f"Key '{full_key}' exists: {key_exists}")
+            return key_exists
         except Exception as e:
-            error = convert_exception(
-                e, 
-                ErrorCode.MEMORY_RETRIEVAL_ERROR,
-                f"Failed to check existence for key {key} in context {context_id}"
-            )
+            error = convert_exception(e, ErrorCode.MEMORY_RETRIEVAL_ERROR, f"Failed to check existence for key '{key}' in context '{context_id}'")
             error.log_error(logger)
             return False
-    
-    @timed_metric(MEMORY_OPERATION_DURATION, {"operation_type": "bulk_load"})
-    async def bulk_load(
-        self, 
-        keys: List[str], 
-        context_id: str, 
-        default: Any = None
-    ) -> Dict[str, Any]:
-        """Load multiple values in a single operation.
-        
-        Args:
-            keys: List of keys to retrieve
-            context_id: The conversation or session ID
-            default: Default value for missing keys
-            
-        Returns:
-            Dictionary of {key: value} for all found keys
-        """
-        track_memory_operation("bulk_load")
-        
+
+    @timed_metric(MEMORY_OPERATION_DURATION, {'operation_type': 'bulk_load'})
+    async def bulk_load(self, keys: List[str], context_id: str, default: Any=None) -> Dict[str, Any]:
+        track_memory_operation('bulk_load')
+        logger.debug(f"Bulk loading {len(keys)} keys for context '{context_id}'")
         if not keys:
             return {}
-            
         try:
             redis = await self._get_redis()
-            
-            # Generate full keys
-            full_keys = [generate_memory_key(k, context_id) for k in keys]
-            
-            # Fetch all values in a single operation
-            start_time = time.time()
-            values = await redis.mget(*full_keys)
-            track_memory_operation_completed("redis_mget", time.time() - start_time)
-            
-            # Deserialize all values
-            result = {}
-            deserialize_tasks = []
-            
-            # Create tasks for deserializing all values in parallel
+            full_keys: List[str] = [generate_memory_key(k, context_id) for k in keys]
+            start_time = time.monotonic()
+            values: List[Optional[bytes]] = await redis.mget(*full_keys)
+            track_memory_operation_completed('redis_mget', time.monotonic() - start_time)
+            result: Dict[str, Any] = {}
+            deserialize_tasks: List[Tuple[str, asyncio.Task[Any]]] = []
             for i, key in enumerate(keys):
                 if values[i] is not None:
-                    task = asyncio.create_task(deserialize_data(values[i], default))
+                    task: asyncio.Task[Any] = asyncio.create_task(deserialize_data(values[i], default), name=f'deserialize_{key}')
                     deserialize_tasks.append((key, task))
                 else:
                     result[key] = default
-            
-            # Wait for all deserialization tasks to complete
-            for key, task in deserialize_tasks:
-                result[key] = await task
-            
+                    track_cache_miss('redis_memory_bulk')
+            if deserialize_tasks:
+                gathered_results = await asyncio.gather(*(task for _, task in deserialize_tasks))
+                for i, (key, _) in enumerate(deserialize_tasks):
+                    result[key] = gathered_results[i]
+            logger.debug(f"Bulk load completed for context '{context_id}'. Loaded {len(result) - list(result.values()).count(default)} keys.")
             return result
-            
         except Exception as e:
-            error = convert_exception(
-                e, 
-                ErrorCode.MEMORY_RETRIEVAL_ERROR,
-                f"Failed to bulk load keys in context {context_id}"
-            )
+            error = convert_exception(e, ErrorCode.MEMORY_RETRIEVAL_ERROR, f"Failed to bulk load keys in context '{context_id}'")
             error.log_error(logger)
             return {k: default for k in keys}
-    
-    @timed_metric(MEMORY_OPERATION_DURATION, {"operation_type": "bulk_save"})
-    async def bulk_save(
-        self, 
-        data: Dict[str, Any], 
-        context_id: str, 
-        ttl: Optional[int] = None
-    ) -> bool:
-        """Save multiple values in a single operation.
-        
-        Args:
-            data: Dictionary of {key: value} pairs to store
-            context_id: The conversation or session ID
-            ttl: Time-to-live in seconds
-            
-        Returns:
-            True if successful, False otherwise
-        """
-        track_memory_operation("bulk_save")
-        
+
+    @timed_metric(MEMORY_OPERATION_DURATION, {'operation_type': 'bulk_save'})
+    async def bulk_save(self, data: Dict[str, Any], context_id: str, ttl: Optional[int]=None) -> bool:
+        track_memory_operation('bulk_save')
+        logger.debug(f"Bulk saving {len(data)} keys for context '{context_id}' with TTL: {ttl}")
         if not data:
             return True
-            
         try:
             redis = await self._get_redis()
-            pipe = redis.pipeline()
-            
-            # Determine TTL
-            effective_ttl = ExpirationPolicy.get_ttl(self.default_ttl, ttl)
-            
-            # Serialize all values in parallel
-            serialize_tasks = {}
-            for key, value in data.items():
-                task = asyncio.create_task(serialize_data(value))
-                serialize_tasks[key] = task
-            
-            # Wait for all serialization tasks to complete
-            serialized_data = {}
-            for key, task in serialize_tasks.items():
-                serialized_data[key] = await task
-            
-            # Add all set commands to pipeline
-            start_time = time.time()
-            for key, value in serialized_data.items():
-                full_key = generate_memory_key(key, context_id)
-                
-                if effective_ttl is not None:
-                    pipe.setex(full_key, effective_ttl, value)
-                else:
-                    pipe.set(full_key, value)
-            
-            # Execute pipeline
-            results = await pipe.execute()
-            track_memory_operation_completed("redis_pipeline_set", time.time() - start_time)
-            
-            # Track memory size
-            total_size = sum(len(value) for value in serialized_data.values())
-            track_memory_size("redis", total_size)
-            
-            # All commands should return True/OK
-            return all(bool(result) for result in results)
-            
+            async with redis.pipeline(transaction=False) as pipe:
+                effective_ttl = ExpirationPolicy.get_ttl(self.default_ttl, ttl)
+                serialize_tasks: Dict[str, asyncio.Task[bytes]] = {}
+                for key, value in data.items():
+                    task: asyncio.Task[bytes] = asyncio.create_task(serialize_data(value), name=f'serialize_{key}')
+                    serialize_tasks[key] = task
+                serialized_data: Dict[str, bytes] = {}
+                total_size_bytes = 0
+                serialized_results = await asyncio.gather(*serialize_tasks.values())
+                keys_in_order = list(serialize_tasks.keys())
+                for i, key in enumerate(keys_in_order):
+                    value_bytes = serialized_results[i]
+                    serialized_data[key] = value_bytes
+                    total_size_bytes += len(value_bytes)
+                    full_key = generate_memory_key(key, context_id)
+                    if effective_ttl is not None and effective_ttl > 0:
+                        pipe.setex(full_key, effective_ttl, value_bytes)
+                    else:
+                        pipe.set(full_key, value_bytes)
+                start_time = time.monotonic()
+                results: List[Any] = await pipe.execute()
+                track_memory_operation_completed('redis_pipeline_set', time.monotonic() - start_time)
+            track_memory_size('redis', total_size_bytes)
+            success = all((bool(res) for res in results))
+            if success:
+                logger.debug(f"Bulk save successful for {len(data)} keys in context '{context_id}'.")
+            else:
+                failed_indices = [i for i, res in enumerate(results) if not bool(res)]
+                logger.error(f"Bulk save failed for {len(failed_indices)} out of {len(data)} keys in context '{context_id}'. Failed indices: {failed_indices}")
+            return success
         except Exception as e:
-            error = convert_exception(
-                e, 
-                ErrorCode.MEMORY_STORAGE_ERROR,
-                f"Failed to bulk save keys in context {context_id}"
-            )
+            error = convert_exception(e, ErrorCode.MEMORY_STORAGE_ERROR, f"Failed to bulk save keys in context '{context_id}'")
             error.log_error(logger)
             return False
-    
-    @timed_metric(MEMORY_OPERATION_DURATION, {"operation_type": "get_stats"})
+
+    @timed_metric(MEMORY_OPERATION_DURATION, {'operation_type': 'get_stats'})
     async def get_stats(self) -> Dict[str, Any]:
-        """Get memory usage statistics.
-        
-        Returns:
-            Dictionary of memory statistics
-        """
+        logger.debug('Fetching Redis memory stats...')
         try:
             redis = await self._get_redis()
-            
-            # Get Redis info
-            start_time = time.time()
-            info = await redis.info(section="memory")
-            dbsize = await redis.dbsize()
-            track_memory_operation_completed("redis_info", time.time() - start_time)
-            
-            # Count memory keys
+            start_time = time.monotonic()
+            info: Dict[str, Any] = await redis.info(section='memory')
+            dbsize: int = await redis.dbsize()
+            track_memory_operation_completed('redis_info_dbsize', time.monotonic() - start_time)
             memory_keys_count = 0
-            cursor = 0
-            
+            scan_start_time = time.monotonic()
+            cursor: Union[bytes, int] = b'0'
             while True:
-                cursor, keys = await redis.scan(cursor, match="memory:*", count=100)
-                memory_keys_count += len(keys)
-                if cursor == 0:
+                current_cursor_int = 0
+                try:
+                    if isinstance(cursor, bytes):
+                        current_cursor_int = int(cursor.decode())
+                    elif isinstance(cursor, int):
+                        current_cursor_int = cursor
+                except ValueError:
+                    pass
+                next_cursor_bytes, keys_bytes = await redis.scan(cursor=current_cursor_int, match='memory:*', count=5000)
+                memory_keys_count += len(keys_bytes)
+                cursor = next_cursor_bytes
+                try:
+                    if isinstance(cursor, bytes) and cursor == b'0':
+                        break
+                    if isinstance(cursor, int) and cursor == 0:
+                        break
+                except ValueError:
                     break
-            
-            # Compile stats
-            stats = {
-                "type": self.__class__.__name__,
-                "total_keys": dbsize,
-                "memory_keys": memory_keys_count,
-                "memory_used_bytes": info.get("used_memory", 0),
-                "memory_peak_bytes": info.get("used_memory_peak", 0),
-                "memory_fragmentation_ratio": info.get("mem_fragmentation_ratio", 0),
-                "evicted_keys": info.get("evicted_keys", 0),
-                "expired_keys": info.get("expired_keys", 0),
-            }
-            
+            track_memory_operation_completed('redis_scan_memkeys', time.monotonic() - scan_start_time)
+            stats = {'implementation_type': self.__class__.__name__, 'redis_total_keys': dbsize, 'redis_memory_namespace_keys': memory_keys_count, 'redis_memory_used_bytes': info.get('used_memory', 0), 'redis_memory_peak_bytes': info.get('used_memory_peak', 0), 'redis_fragmentation_ratio': info.get('mem_fragmentation_ratio', 0.0), 'redis_evicted_keys': info.get('evicted_keys', 0), 'redis_expired_keys': info.get('expired_keys', 0)}
+            logger.debug(f'Redis memory stats retrieved: {stats}')
             return stats
-            
         except Exception as e:
-            logger.error(f"Failed to get Redis stats: {str(e)}")
-            return {
-                "type": self.__class__.__name__,
-                "error": str(e)
-            }
-            
-    async def get_lock(self, name: str, expire_time: int = 10) -> AsyncLock:
-        """Get a distributed lock for coordinating access.
-        
-        Args:
-            name: Lock name
-            expire_time: Lock expiration time in seconds
-            
-        Returns:
-            AsyncLock instance
-        """
+            logger.error(f'Failed to get Redis stats: {str(e)}', exc_info=True)
+            return {'implementation_type': self.__class__.__name__, 'error': f'Failed to retrieve Redis stats: {str(e)}'}
+
+    async def get_lock(self, name: str, expire_time: int=10) -> AsyncLock:
+        logger.debug(f"Getting async lock named '{name}' with expire time {expire_time}s")
         redis = await self._get_redis()
-        return AsyncLock(redis, name, expire_time)
+        lock_key_name = f'memory_lock:{name}'
+        return AsyncLock(redis, lock_key_name, expire_time)

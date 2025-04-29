@@ -1,0 +1,134 @@
+.
+├── auto_pip.sh
+├── clean.sh
+├── pytest.ini
+├── requirements.txt
+├── run_pytest.sh
+├── src
+│   ├── __init__.py
+│   ├── agents
+│   │   ├── config.py
+│   │   ├── context_manager.py
+│   │   ├── factory.py
+│   │   ├── mcp_executor.py
+│   │   └── mcp_planner.py
+│   ├── api
+│   │   ├── app.py
+│   │   ├── dependencies.py
+│   │   ├── parallel.py
+│   │   ├── rate_limiting.py
+│   │   ├── routes
+│   │   │   ├── context.py
+│   │   │   ├── streaming.py
+│   │   │   └── tasks.py
+│   │   ├── schemas
+│   │   │   └── task.py
+│   │   └── streaming.py
+│   ├── config
+│   │   ├── __init__.py
+│   │   ├── connections.py
+│   │   ├── errors.py
+│   │   ├── logger.py
+│   │   ├── metrics.py
+│   │   └── settings.py
+│   ├── core
+│   │   ├── agent.py
+│   │   ├── circuit_breaker.py
+│   │   ├── exceptions.py
+│   │   ├── mcp
+│   │   │   ├── adapter_base.py
+│   │   │   ├── adapters
+│   │   │   │   ├── __init__.py
+│   │   │   │   ├── agent_adapter.py
+│   │   │   │   ├── llm_adapter.py
+│   │   │   │   ├── memory_adapter.py
+│   │   │   │   ├── orchestrator_adapter.py
+│   │   │   │   ├── task_adapter.py
+│   │   │   │   └── workflow_adapter.py
+│   │   │   ├── api
+│   │   │   │   ├── middleware.py
+│   │   │   │   ├── openapi_extension.py
+│   │   │   │   ├── serialization_middleware.py
+│   │   │   │   ├── validation_middleware.py
+│   │   │   │   └── websocket_adapter.py
+│   │   │   ├── compression.py
+│   │   │   ├── llm
+│   │   │   │   ├── context_model_selector.py
+│   │   │   │   ├── context_performance.py
+│   │   │   │   ├── context_preserving_fallback.py
+│   │   │   │   └── context_transform.py
+│   │   │   ├── orchestration
+│   │   │   │   ├── checkpointing.py
+│   │   │   │   ├── context_flow.py
+│   │   │   │   ├── context_merge.py
+│   │   │   │   └── context_routing.py
+│   │   │   ├── protocol.py
+│   │   │   ├── schema.py
+│   │   │   ├── serialization.py
+│   │   │   └── versioning.py
+│   │   ├── registry.py
+│   │   ├── task.py
+│   │   └── worker_pool.py
+│   ├── llm
+│   │   ├── __init__.py
+│   │   ├── adapters
+│   │   │   ├── __init__.py
+│   │   │   ├── anthropic.py
+│   │   │   ├── gemini.py
+│   │   │   └── openai.py
+│   │   ├── base.py
+│   │   ├── cache.py
+│   │   ├── connection_pool.py
+│   │   ├── factory.py
+│   │   ├── failure_detector.py
+│   │   ├── fallback.py
+│   │   ├── models.py
+│   │   ├── parallel.py
+│   │   ├── performance.py
+│   │   ├── prompt_optimizer.py
+│   │   ├── retry.py
+│   │   ├── selector.py
+│   │   └── tokenizer.py
+│   ├── main.py
+│   ├── memory
+│   │   ├── base.py
+│   │   ├── manager.py
+│   │   ├── redis_memory.py
+│   │   ├── utils.py
+│   │   └── vector_store.py
+│   ├── orchestration
+│   │   ├── dispatcher.py
+│   │   ├── flow_control.py
+│   │   ├── load_balancer.py
+│   │   ├── orchestration_worker_pool.py
+│   │   ├── orchestrator.py
+│   │   ├── scheduler.py
+│   │   ├── task_queue.py
+│   │   ├── worker_manager.py
+│   │   └── workflow.py
+│   ├── prompts
+│   │   └── templates.py
+│   ├── tools
+│   │   ├── base.py
+│   │   ├── calculator.py
+│   │   ├── datetime_tool.py
+│   │   ├── registry.py
+│   │   ├── runner.py
+│   │   ├── web_search.py
+│   │   └── web_search_google.py
+│   └── utils
+│       ├── ids.py
+│       ├── serialization.py
+│       └── timing.py
+├── structure.txt
+└── tests
+    └── config
+        ├── test_config_integration.py
+        ├── test_connections.py
+        ├── test_connections_load.py
+        ├── test_errors.py
+        ├── test_logger.py
+        ├── test_metrics.py
+        └── test_settings.py
+
+22 directories, 110 files

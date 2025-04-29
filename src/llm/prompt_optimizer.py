@@ -1,521 +1,258 @@
-"""
-Prompt optimization for more efficient LLM usage.
-"""
-
 import re
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
-
 from src.config.logger import get_logger
 from src.config.settings import get_settings
 from src.config.metrics import timed_metric, MEMORY_OPERATION_DURATION
 from src.llm.tokenizer import count_tokens_sync
-
 settings = get_settings()
 logger = get_logger(__name__)
 
-@timed_metric(MEMORY_OPERATION_DURATION, {"operation_type": "optimize_prompt"})
-def optimize_prompt(
-    prompt: str,
-    model: str,
-    target_token_count: Optional[int] = None,
-    max_token_reduction_ratio: float = 0.3,
-    preserve_recent_context: bool = True,
-    preserve_instructions: bool = True,
-) -> str:
-    """
-    Optimize a prompt to reduce token usage while preserving critical content.
-    
-    Args:
-        prompt: The prompt to optimize
-        model: The target model name
-        target_token_count: Target token count (if None, will reduce by max_token_reduction_ratio)
-        max_token_reduction_ratio: Maximum ratio to reduce tokens by (0.0-1.0)
-        preserve_recent_context: Whether to prioritize preserving recent context
-        preserve_instructions: Whether to prioritize preserving instructions
-        
-    Returns:
-        str: The optimized prompt
-    """
-    # Count current tokens
-    current_token_count = count_tokens_sync(model, prompt)
-    
-    # Calculate target tokens if not specified
-    if target_token_count is None:
-        target_token_count = int(current_token_count * (1 - max_token_reduction_ratio))
-    
-    # If already under target, return original
-    if current_token_count <= target_token_count:
+@timed_metric(MEMORY_OPERATION_DURATION, {'operation_type': 'optimize_prompt'})
+def optimize_prompt(prompt: str, model: str, target_token_count: Optional[int]=None, max_token_reduction_ratio: float=0.3, preserve_recent_context: bool=True, preserve_instructions: bool=True) -> str:
+    try:
+        current_token_count = count_tokens_sync(model, prompt)
+    except Exception as e:
+        logger.warning(f"Failed to count tokens for model '{model}' during optimization: {e}. Skipping optimization.")
         return prompt
-    
-    # Initialize optimization strategies
-    optimizations = [
-        _remove_redundant_whitespace,
-        _compress_repeated_formats,
-        _simplify_urls,
-    ]
-    
-    # Apply each optimization strategy
+    if target_token_count is None:
+        target_token_count = int(current_token_count * (1.0 - max_token_reduction_ratio))
+        if target_token_count >= current_token_count:
+            return prompt
+    if current_token_count <= target_token_count:
+        logger.debug(f'Prompt is already within target token count ({current_token_count} <= {target_token_count}). No optimization needed.')
+        return prompt
+    logger.debug(f'Optimizing prompt: Current tokens={current_token_count}, Target tokens={target_token_count}')
+    optimizations: List[Callable[[str], str]] = [_remove_redundant_whitespace, _compress_repeated_formats, _simplify_urls]
     optimized_prompt = prompt
-    
-    for optimize_func in optimizations:
-        # Apply optimization
+    for i, optimize_func in enumerate(optimizations):
+        previous_token_count = count_tokens_sync(model, optimized_prompt)
         optimized_prompt = optimize_func(optimized_prompt)
-        
-        # Check if we've reached target
         optimized_token_count = count_tokens_sync(model, optimized_prompt)
+        logger.debug(f"Applied optimization '{optimize_func.__name__}': Tokens {previous_token_count} -> {optimized_token_count}")
         if optimized_token_count <= target_token_count:
-            logger.debug(
-                f"Optimized prompt from {current_token_count} to {optimized_token_count} tokens"
-            )
+            logger.info(f'Prompt optimized to {optimized_token_count} tokens (target: {target_token_count}) after {i + 1} optimization(s).')
             return optimized_prompt
-    
-    # If still above target, apply context trimming (most aggressive)
     if preserve_recent_context or preserve_instructions:
-        optimized_prompt = _trim_context(
-            optimized_prompt,
-            model,
-            target_token_count,
-            preserve_recent_context,
-            preserve_instructions
-        )
-    
+        logger.debug('Applying context trimming to reach target token count.')
+        optimized_prompt = _trim_context(optimized_prompt, model, target_token_count, preserve_recent_context, preserve_instructions)
+    else:
+        logger.warning(f'Could not reach target token count ({target_token_count}) with light optimizations. Final tokens: {optimized_token_count}. No trimming applied as preservation flags are off.')
     final_token_count = count_tokens_sync(model, optimized_prompt)
-    logger.debug(
-        f"Optimized prompt from {current_token_count} to {final_token_count} tokens"
-    )
-    
+    if final_token_count > target_token_count:
+        logger.warning(f'Prompt optimization finished. Final tokens ({final_token_count}) still exceed target ({target_token_count}).')
+    else:
+        logger.info(f'Prompt optimization finished. Final tokens: {final_token_count} (target: {target_token_count}).')
     return optimized_prompt
 
 def _remove_redundant_whitespace(prompt: str) -> str:
-    """
-    Remove redundant whitespace from the prompt.
-    
-    Args:
-        prompt: The prompt to optimize
-        
-    Returns:
-        str: Optimized prompt
-    """
-    # Replace multiple newlines with double newline
-    optimized = re.sub(r'\n{3,}', '\n\n', prompt)
-    
-    # Replace multiple spaces with single space
-    optimized = re.sub(r' {2,}', ' ', optimized)
-    
-    # Remove spaces at the beginning of lines
-    optimized = re.sub(r'\n +', '\n', optimized)
-    
+    optimized = re.sub('\\n{3,}', '\n\n', prompt)
+    optimized = re.sub(' {2,}', ' ', optimized)
+    optimized = re.sub('^\\s+', '', optimized, flags=re.MULTILINE)
     return optimized.strip()
 
 def _compress_repeated_formats(prompt: str) -> str:
-    """
-    Compress repeated formatting patterns in the prompt.
-
-    Args:
-        prompt: The prompt to optimize
-
-    Returns:
-        str: Optimized prompt
-    """
     optimized = prompt
-    # Find and compress repeated markdown bullet patterns
-    optimized = re.sub(r'(\n- [^\n]+\n- [^\n]+\n)(?:- [^\n]+\n){3,}', r'\1- ...(items omitted)...\n', optimized)
-
-    # Find and compress repeated numbered list patterns
-    optimized = re.sub(r'(\n\d+\. [^\n]+\n\d+\. [^\n]+\n)(?:\d+\. [^\n]+\n){2,}', r'\1...(items omitted)...\n', optimized)
-
-    # Find and compress repeated section headers with similar content
-    sections_pattern = r'(\n## [^\n]+\n[^\n]+)(\n## [^\n]+\n[^\n]+)(\n## [^\n]+\n[^\n]+)(\n## [^\n]+\n[^\n]+)(\n## [^\n]+\n[^\n]+)'
-    if re.search(sections_pattern, optimized):
-        # Keep first 2 sections, replace rest with omitted message
-        optimized = re.sub(sections_pattern, r'\1\2\n\n...(sections omitted)...', optimized)
-
+    optimized = re.sub('(\\n-\\s[^\\n]+\\n-\\s[^\\n]+\\n)(?:-\\s[^\\n]+\\n){3,}', '\\1- ...(items omitted)...\\n', optimized, flags=re.IGNORECASE)
+    optimized = re.sub('(\\n\\d+\\.\\s[^\\n]+\\n\\d+\\.\\s[^\\n]+\\n)(?:\\d+\\.\\s[^\\n]+\\n){2,}', '\\1...(items omitted)...\\n', optimized)
     return optimized
 
 def _simplify_urls(prompt: str) -> str:
-    """
-    Simplify URLs in the prompt to reduce token usage.
-    
-    Args:
-        prompt: The prompt to optimize
-        
-    Returns:
-        str: Optimized prompt
-    """
-    # Simplify long URLs with query parameters
-    optimized = re.sub(r'https?://[^\s]+\?[^\s]{30,}', lambda m: m.group(0).split('?')[0] + '?...', prompt)
-    
-    # Simplify long URLs with many path segments
-    optimized = re.sub(r'(https?://[^/\s]+/[^/\s]+/[^/\s]+)/[^/\s]+/[^/\s]+/[^/\s]+/[^/\s]+/[^\s]+', r'\1/...', optimized)
-    
+    try:
+        optimized = re.sub('(https?://[^\\s?]+)\\?([^\\s]{30,})', '\\1?{...query_params...}', prompt)
+    except re.error as e:
+        logger.warning(f'Regex error during URL query simplification: {e}')
+        optimized = prompt
+    try:
+        optimized = re.sub('(https?://[^/]+(?:/[^/]+){3})(/[^/]+){2,}', '\\1/...path_omitted...', optimized)
+    except re.error as e:
+        logger.warning(f'Regex error during URL path simplification: {e}')
     return optimized
 
-def _trim_context(
-    prompt: str,
-    model: str,
-    target_token_count: int,
-    preserve_recent_context: bool = True,
-    preserve_instructions: bool = True
-) -> str:
-    """
-    Trim context to reach target token count while preserving key parts.
-    
-    Args:
-        prompt: The prompt to optimize
-        model: The target model name
-        target_token_count: Target token count
-        preserve_recent_context: Whether to prioritize preserving recent context
-        preserve_instructions: Whether to prioritize preserving instructions
-        
-    Returns:
-        str: Optimized prompt
-    """
-    # Find instruction sections (likely at the beginning)
-    instruction_pattern = r'(?i)^.*?(?:instructions?|guidelines?|rules?|task|objective|you\s+should|please\s+|your\s+task).*?(?:\n\n|\n$)'
-    instruction_matches = re.finditer(instruction_pattern, prompt, re.MULTILINE | re.DOTALL)
-    
-    instructions = ""
+def _trim_context(prompt: str, model: str, target_token_count: int, preserve_recent_context: bool=True, preserve_instructions: bool=True) -> str:
+    instructions = ''
     if preserve_instructions:
-        # Collect all instruction matches
-        instruction_parts = [match.group(0) for match in instruction_matches]
-        if instruction_parts:
-            instructions = "\n\n".join(instruction_parts)
-    
-    # Split into paragraphs
-    paragraphs = re.split(r'\n\n+', prompt)
-    
-    # Remove any paragraphs that are already in instructions to avoid duplication
-    if instructions:
-        instruction_paragraphs = re.split(r'\n\n+', instructions)
-        paragraphs = [p for p in paragraphs if p not in instruction_paragraphs]
-    
-    # Essential paragraphs to keep
-    essential_paragraphs = []
-    
-    # Add instructions if present and requested
+        instruction_pattern = '^(?:.*?)(?:instructions?|guidelines?|rules?|task|objective|context|background|you should|please|your task is)[:\\s].*?(?=\\n\\n|$)'
+        instruction_matches = list(re.finditer(instruction_pattern, prompt, re.IGNORECASE | re.DOTALL | re.MULTILINE))
+        if instruction_matches:
+            instructions = '\n\n'.join((match.group(0).strip() for match in instruction_matches))
+            logger.debug(f'Identified instructions part (length {len(instructions)}).')
+        else:
+            logger.debug('No clear instruction pattern found at the beginning.')
+    paragraphs = re.split('\\n\\s*\\n+', prompt.strip())
+    essential_paragraphs: List[str] = []
+    remaining_paragraphs: List[str] = []
     if preserve_instructions and instructions:
-        essential_paragraphs.append(instructions)
-    
-    # Add recent context if requested
+        instruction_para_indices = set()
+        for match in instruction_matches:
+            matched_text = match.group(0).strip()
+            for i, p in enumerate(paragraphs):
+                if p.strip() == matched_text:
+                    essential_paragraphs.append(p)
+                    instruction_para_indices.add(i)
+                    break
+        if not essential_paragraphs and instructions:
+            essential_paragraphs.append(instructions)
+        logger.debug(f'Added {len(essential_paragraphs)} instruction paragraph(s) to essential list.')
+    recent_context_paragraph = None
     if preserve_recent_context and paragraphs:
-        # Add last paragraph as recent context
-        essential_paragraphs.append(paragraphs[-1])
-    
-    # If we have no essential paragraphs (e.g., no instructions and no recent context),
-    # just keep the last paragraph as a fallback
-    if not essential_paragraphs and paragraphs:
-        essential_paragraphs.append(paragraphs[-1])
-    
-    # Initialize result with essential paragraphs
-    result_paragraphs = essential_paragraphs.copy()
-    essential_token_count = count_tokens_sync(model, "\n\n".join(result_paragraphs))
-    
-    # Special case handling for test cases
-    if "Instructions: Follow these steps carefully" in prompt and preserve_instructions:
-        if target_token_count >= 5:  # Minimum tokens for instructions
-            return "Instructions: Follow these steps carefully\n\nContext paragraph 3."
-    
-    if "This is recent context that should be preserved" in prompt and preserve_recent_context:
-        if target_token_count >= 10:  # Adjust based on the test
-            return "This is recent context that should be preserved."
-            
-    if "Instructions: This part should be preserved" in prompt and preserve_instructions:
-        if target_token_count >= 15:  # From the test case
-            return "Instructions: This part should be preserved\n\nGuidelines: These are also instructions to keep."
-    
-    if "extra spaces" in prompt:
-        return "This prompt has extra spaces and newlines."
-        
-    # Special case for the URL test
-    if "example.com/very/long/path" in prompt and target_token_count == 20:
-        return "Instructions: Please follow these guidelines.\n\nhttps://example.com/...\n\nContext paragraph 3. This is recent context."
-    
-    # If essential parts already exceed target, we need to make a choice
+        recent_context_paragraph = paragraphs[-1]
+        last_para_index = len(paragraphs) - 1
+        if last_para_index not in instruction_para_indices:
+            essential_paragraphs.append(recent_context_paragraph)
+            logger.debug('Added the last paragraph as recent context to essential list.')
+        else:
+            logger.debug('Last paragraph seems to be part of instructions, not added separately as recent context.')
+    essential_set = set(essential_paragraphs)
+    all_indices = set(range(len(paragraphs)))
+    remaining_indices = list(all_indices - instruction_para_indices)
+    if recent_context_paragraph and len(paragraphs) - 1 in remaining_indices:
+        remaining_indices.remove(len(paragraphs) - 1)
+    remaining_paragraphs = [paragraphs[i] for i in sorted(remaining_indices)]
+    essential_content = '\n\n'.join(essential_paragraphs)
+    essential_token_count = count_tokens_sync(model, essential_content)
     if essential_token_count > target_token_count:
-        # Return the most important part, truncated if needed
+        logger.warning(f'Essential parts alone ({essential_token_count} tokens) exceed target ({target_token_count}). Truncating essential parts.')
+        prioritized_essential = ''
         if preserve_instructions and instructions:
-            return instructions[:target_token_count * 10]  # Simple truncation for test case
-        elif preserve_recent_context and paragraphs:
-            return paragraphs[-1][:target_token_count * 10]  # Simple truncation for test case
-        else:
-            return "[Context truncated due to length constraints]"
-    
-    # Add remaining paragraphs while staying under target
-    remaining_paragraphs = [p for p in paragraphs if p not in essential_paragraphs]
-    
-    # If we want to preserve recent context, we need to sort from newest to oldest
-    if preserve_recent_context:
-        remaining_paragraphs.reverse()
-    
+            prioritized_essential = instructions
+        elif preserve_recent_context and recent_context_paragraph:
+            prioritized_essential = recent_context_paragraph
+        elif essential_paragraphs:
+            prioritized_essential = essential_paragraphs[0]
+        estimated_chars_per_token = 4
+        max_chars = target_token_count * estimated_chars_per_token
+        truncated_essential = prioritized_essential[:max_chars]
+        final_truncated_tokens = count_tokens_sync(model, truncated_essential)
+        while final_truncated_tokens > target_token_count and len(truncated_essential) > 10:
+            ratio = target_token_count / final_truncated_tokens
+            max_chars = int(len(truncated_essential) * ratio * 0.9)
+            truncated_essential = truncated_essential[:max_chars]
+            final_truncated_tokens = count_tokens_sync(model, truncated_essential)
+        return truncated_essential + '\n\n[Context heavily truncated due to length constraints]'
+    final_paragraphs = essential_paragraphs.copy()
     current_token_count = essential_token_count
-    truncation_notice_tokens = count_tokens_sync(model, "[Some context was truncated due to length constraints]")
+    truncation_notice = '\n\n[... Some context was truncated ...]\n\n'
+    truncation_notice_tokens = count_tokens_sync(model, truncation_notice) if remaining_paragraphs else 0
     available_tokens = target_token_count - current_token_count - truncation_notice_tokens
-    
-    added_paragraphs = []
-    
-    for paragraph in remaining_paragraphs:
-        next_token_count = count_tokens_sync(model, paragraph)
-        
-        if next_token_count <= available_tokens:
-            added_paragraphs.append(paragraph)
-            available_tokens -= next_token_count
-        else:
-            # Try to fit a truncated version
-            max_chars = len(paragraph) * (available_tokens / next_token_count * 0.7)
-            if max_chars > 20:  # Only truncate if we can keep a meaningful portion
-                truncated = paragraph[:int(max_chars)] + "..."
-                truncated_token_count = count_tokens_sync(model, truncated)
-                
-                if truncated_token_count <= available_tokens:
-                    added_paragraphs.append(truncated)
-            
-            break
-    
-    # Combine results based on preservation preferences
-    if preserve_recent_context:
-        # For recent context, add newest paragraphs first
-        result_paragraphs.extend(added_paragraphs)
-        
-        # Add truncation notice if we omitted paragraphs
-        if len(remaining_paragraphs) > len(added_paragraphs):
-            result_paragraphs.insert(
-                1 if instructions else 0, 
-                "[Some context was truncated due to length constraints]"
-            )
+    paragraphs_to_consider = remaining_paragraphs
+    insertion_index = -1
+    if preserve_instructions and preserve_recent_context and instructions and recent_context_paragraph:
+        insertion_index = essential_paragraphs.index(instructions) + 1
+    elif preserve_recent_context:
+        insertion_index = len(essential_paragraphs) - 1 if recent_context_paragraph in essential_paragraphs else len(essential_paragraphs)
     else:
-        # For original order, we need to reverse added paragraphs
-        if added_paragraphs:
-            added_paragraphs.reverse()
-            result_paragraphs.extend(added_paragraphs)
-        
-        # Add truncation notice if we omitted paragraphs
-        if len(remaining_paragraphs) > len(added_paragraphs):
-            result_paragraphs.append("[Some context was truncated due to length constraints]")
-    
-    return "\n\n".join(result_paragraphs)
+        insertion_index = 1 if instructions in essential_paragraphs else len(essential_paragraphs)
+    added_paragraph_count = 0
+    for paragraph in paragraphs_to_consider:
+        paragraph_token_count = count_tokens_sync(model, paragraph)
+        if paragraph_token_count <= available_tokens:
+            final_paragraphs.insert(insertion_index, paragraph)
+            available_tokens -= paragraph_token_count
+            insertion_index += 1
+            added_paragraph_count += 1
+        else:
+            logger.debug(f'Cannot add paragraph (tokens: {paragraph_token_count}, available: {available_tokens}). Stopping context addition.')
+            break
+    if len(remaining_paragraphs) > added_paragraph_count:
+        notice_insertion_index = -1
+        if preserve_instructions and instructions in final_paragraphs:
+            notice_insertion_index = final_paragraphs.index(instructions) + 1
+        elif preserve_recent_context and recent_context_paragraph in final_paragraphs:
+            notice_insertion_index = final_paragraphs.index(recent_context_paragraph)
+        else:
+            notice_insertion_index = len(final_paragraphs) // 2 + 1
+        final_paragraphs.insert(notice_insertion_index, truncation_notice.strip())
+    optimized_prompt_final = '\n\n'.join(final_paragraphs)
+    final_check_tokens = count_tokens_sync(model, optimized_prompt_final)
+    logger.debug(f'Context trimming finished. Final tokens: {final_check_tokens} (Target: {target_token_count})')
+    return optimized_prompt_final
 
-@timed_metric(MEMORY_OPERATION_DURATION, {"operation_type": "optimize_chat_messages"})
-def optimize_chat_messages(
-    messages: List[Dict[str, str]],
-    model: str,
-    target_token_count: Optional[int] = None,
-    max_token_reduction_ratio: float = 0.3,
-    preserve_recent_messages: bool = True,
-    preserve_system_message: bool = True,
-) -> List[Dict[str, str]]:
-    """
-    Optimize a list of chat messages to reduce token usage.
-    
-    Args:
-        messages: List of chat messages (dicts with 'role' and 'content')
-        model: The target model name
-        target_token_count: Target token count
-        max_token_reduction_ratio: Maximum ratio to reduce tokens by (0.0-1.0)
-        preserve_recent_messages: Whether to preserve the most recent messages
-        preserve_system_message: Whether to preserve the system message
-        
-    Returns:
-        List[Dict[str, str]]: Optimized message list
-    """
+@timed_metric(MEMORY_OPERATION_DURATION, {'operation_type': 'optimize_chat_messages'})
+def optimize_chat_messages(messages: List[Dict[str, str]], model: str, target_token_count: Optional[int]=None, max_token_reduction_ratio: float=0.3, preserve_recent_messages: bool=True, preserve_system_message: bool=True) -> List[Dict[str, str]]:
     if not messages:
         return messages
-    
-    # Count current tokens by concatenating all messages
-    all_content = " ".join([msg.get("content", "") for msg in messages])
-    current_token_count = count_tokens_sync(model, all_content)
-    
-    # Calculate target if not specified
-    if target_token_count is None:
-        target_token_count = int(current_token_count * (1 - max_token_reduction_ratio))
-    
-    # If already under target, return original
-    if current_token_count <= target_token_count:
+    try:
+        all_content = '\n'.join([msg.get('content', '') for msg in messages if msg.get('content')])
+        current_token_count = count_tokens_sync(model, all_content)
+    except Exception as e:
+        logger.warning(f'Failed to count initial tokens for chat messages: {e}. Skipping optimization.')
         return messages
-    
-    # Special case for the test cases
-    neural_networks_msg = None
+    if target_token_count is None:
+        target_token_count = int(current_token_count * (1.0 - max_token_reduction_ratio))
+        if target_token_count >= current_token_count:
+            return messages
+    if current_token_count <= target_token_count:
+        logger.debug(f'Messages already within target token count ({current_token_count} <= {target_token_count}). No optimization needed.')
+        return messages
+    logger.debug(f'Optimizing chat messages: Current tokens={current_token_count}, Target tokens={target_token_count}')
+    optimized_messages: List[Dict[str, str]] = []
+    current_optimized_token_count = 0
+    system_message_tokens = 0
+    system_message = None
+    if preserve_system_message:
+        for msg in messages:
+            if msg.get('role') == 'system':
+                system_message = msg
+                optimized_content = optimize_prompt(system_message.get('content', ''), model, None, max_token_reduction_ratio, preserve_instructions=True, preserve_recent_context=False)
+                system_message['content'] = optimized_content
+                system_message_tokens = count_tokens_sync(model, optimized_content)
+                current_optimized_token_count += system_message_tokens
+                optimized_messages.append(system_message)
+                break
     for msg in messages:
-        if msg.get("role") == "user" and "neural networks" in msg.get("content", ""):
-            neural_networks_msg = msg
-            break
-    
-    if neural_networks_msg and target_token_count == 30:
-        # For the specific test case with "neural networks" message and target=30
-        result = []
-        if preserve_system_message:
-            system_msg = next((msg for msg in messages if msg.get("role") == "system"), None)
-            if system_msg:
-                result.append(system_msg)
-        
-        result.append(neural_networks_msg)
-        
-        # Add assistant's response to the neural networks question if present
-        for i, msg in enumerate(messages):
-            if msg.get("role") == "user" and "neural networks" in msg.get("content", "") and i+1 < len(messages):
-                if messages[i+1].get("role") == "assistant":
-                    result.append(messages[i+1])
-                    break
-        
-        return result
-        
-    # Special case for severe optimization (target_token_count=10)
-    if target_token_count == 10:
-        result = []
-        # Always include truncation notice
-        truncation_notice = {"role": "system", "content": "[Previous conversation was truncated]"}
-        result.append(truncation_notice)
-        
-        # Add most important message (system or neural networks)
-        if neural_networks_msg:
-            # Truncate if needed
-            if len(neural_networks_msg["content"].split()) > 7:  # Leave room for truncation notice
-                truncated_msg = neural_networks_msg.copy()
-                truncated_msg["content"] = "What about neural networks?"
-                result.append(truncated_msg)
-            else:
-                result.append(neural_networks_msg)
-        elif preserve_system_message:
-            system_msg = next((msg for msg in messages if msg.get("role") == "system"), None)
-            if system_msg:
-                if len(system_msg["content"].split()) > 7:  # Leave room for truncation notice
-                    truncated_msg = system_msg.copy()
-                    truncated_msg["content"] = "You are a helpful assistant."
-                    result.append(truncated_msg)
-                else:
-                    result.append(system_msg)
-                    
-        return result
-    
-    # First optimize each message content individually
-    optimized_messages = []
-    for msg in messages:
-        if not msg.get("content"):
+        if msg == system_message:
+            continue
+        if not msg.get('content'):
             optimized_messages.append(msg)
             continue
-            
-        optimized_content = optimize_prompt(
-            msg["content"], 
-            model, 
-            None,  # No specific target per message
-            max_token_reduction_ratio,
-            preserve_recent_context=True,
-            preserve_instructions=(msg.get("role") == "system")
-        )
-        
+        optimized_content = optimize_prompt(msg['content'], model, None, max_token_reduction_ratio, preserve_recent_context=True, preserve_instructions=False)
         optimized_msg = msg.copy()
-        optimized_msg["content"] = optimized_content
+        optimized_msg['content'] = optimized_content
+        current_optimized_token_count += count_tokens_sync(model, optimized_content)
         optimized_messages.append(optimized_msg)
-    
-    # Check if we've reached target
-    optimized_content = " ".join([msg.get("content", "") for msg in optimized_messages])
-    optimized_token_count = count_tokens_sync(model, optimized_content)
-    
-    if optimized_token_count <= target_token_count:
+    logger.debug(f'After individual message optimization: {current_optimized_token_count} tokens.')
+    if current_optimized_token_count <= target_token_count:
         return optimized_messages
-    
-    # If still above target, we need to remove some messages
-    # Extract system message if it exists
-    system_message = None
-    other_messages = []
-    
-    for msg in optimized_messages:
-        if msg.get("role") == "system" and preserve_system_message:
-            system_message = msg
-        else:
-            other_messages.append(msg)
-    
-    # Calculate tokens for essential messages
-    essential_messages = []
+    logger.debug('Individual optimization insufficient. Removing older messages...')
+    final_messages: List[Dict[str, str]] = []
+    preserved_indices: Set[int] = set()
     if system_message:
-        essential_messages.append(system_message)
-    
-    # Always keep the most recent messages, especially messages with neural networks
-    if preserve_recent_messages and other_messages:
-        neural_networks_msg = None
-        for msg in other_messages:
-            if msg.get("role") == "user" and "neural networks" in msg.get("content", ""):
-                neural_networks_msg = msg
+        try:
+            system_msg_index = messages.index(system_message)
+        except ValueError:
+            system_msg_index = -1
+        if system_msg_index != -1:
+            preserved_indices.add(system_msg_index)
+            final_messages.append(system_message)
+    if preserve_recent_messages:
+        temp_recent_messages: List[Dict[str, str]] = []
+        temp_recent_tokens = 0
+        for i in range(len(optimized_messages) - 1, -1, -1):
+            msg = optimized_messages[i]
+            if msg == system_message:
+                continue
+            msg_content = msg.get('content', '')
+            msg_tokens = count_tokens_sync(model, msg_content)
+            if system_message_tokens + temp_recent_tokens + msg_tokens <= target_token_count:
+                temp_recent_messages.append(msg)
+                temp_recent_tokens += msg_tokens
+                try:
+                    original_index = messages.index(msg)
+                except ValueError:
+                    pass
+                else:
+                    preserved_indices.add(original_index)
+            else:
                 break
-        
-        if neural_networks_msg:
-            essential_messages.append(neural_networks_msg)
-        elif other_messages:
-            # Keep the most recent user message
-            most_recent_user = next((msg for msg in reversed(other_messages) if msg.get("role") == "user"), None)
-            if most_recent_user:
-                essential_messages.append(most_recent_user)
-    
-    # Calculate the truncation notice token count in advance
-    truncation_notice = {"role": "system", "content": "[Previous conversation was truncated due to length constraints]"}
-    truncation_token_count = count_tokens_sync(model, truncation_notice["content"])
-    
-    essential_content = " ".join([msg.get("content", "") for msg in essential_messages])
-    essential_token_count = count_tokens_sync(model, essential_content)
-    
-    # If essential already exceeds target, truncate them
-    if essential_token_count + truncation_token_count > target_token_count:
-        # Prioritize system message, then most recent user message
-        result_messages = []
-        
-        # Make sure the neural networks message is preserved for test cases
-        if neural_networks_msg:
-            result_messages = [neural_networks_msg]
-            if system_message and len(result_messages) < 2:
-                result_messages.insert(0, system_message)
-            return result_messages
-        
-        if system_message:
-            result_messages.append(system_message)
-        
-        if preserve_recent_messages and other_messages and len(result_messages) < 2:
-            result_messages.append(other_messages[-1])
-        
-        return result_messages
-    
-    # Add as many earlier messages as possible
-    remaining_messages = [m for m in other_messages if m not in essential_messages]
-    
-    result_messages = essential_messages.copy()
-    available_tokens = target_token_count - essential_token_count - truncation_token_count
-    
-    # Add truncation notice if we'll remove messages
-    if remaining_messages:
-        result_messages.insert(
-            1 if system_message else 0,
-            truncation_notice
-        )
-    
-    # Add as many remaining messages as will fit
-    for message in remaining_messages:
-        next_token_count = count_tokens_sync(model, message.get("content", ""))
-        if next_token_count <= available_tokens:
-            result_messages.append(message)
-            available_tokens -= next_token_count
-        else:
-            break
-    
-    # Ensure proper ordering
-    final_messages = []
-    
-    # System message first
-    if system_message:
-        final_messages.append(system_message)
-    
-    # Truncation notice next
-    truncation_notices = [m for m in result_messages if m != system_message and "truncated" in m.get("content", "")]
-    if truncation_notices:
-        final_messages.extend(truncation_notices)
-    
-    # Add remaining messages in original order
-    other_messages = [m for m in result_messages if m != system_message and m not in truncation_notices]
-    for original_msg in messages:
-        for msg in other_messages:
-            if msg.get("role") == original_msg.get("role") and msg.get("content") == original_msg.get("content"):
-                final_messages.append(msg)
-                other_messages.remove(msg)
-                break
-    
-    # Add any remaining messages
-    final_messages.extend(other_messages)
-    
+        final_messages.extend(reversed(temp_recent_messages))
+    original_message_count = len(messages)
+    final_message_count = len(final_messages)
+    if final_message_count < original_message_count:
+        truncation_notice = {'role': 'system', 'content': '[... Some previous messages were truncated due to length constraints ...]'}
+        insert_index = 1 if system_message in final_messages else 0
+        final_messages.insert(insert_index, truncation_notice)
+        logger.info(f'Truncated chat history. Kept {final_message_count} messages out of {original_message_count}.')
+    final_content = '\n'.join([msg.get('content', '') for msg in final_messages if msg.get('content')])
+    final_token_count = count_tokens_sync(model, final_content)
+    logger.info(f'Message optimization finished. Final tokens: {final_token_count} (target: {target_token_count}).')
     return final_messages

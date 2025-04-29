@@ -13,7 +13,7 @@ TEST_PATH="$1"
 export PYTHONPATH=.
 
 # 1) 콘솔에 실패한 테스트와 트레이스백만 출력
-pytest --cov=src --cov-report=term-missing -qq --disable-warnings -rN "$TEST_PATH"
+pytest -qq --disable-warnings -rN "$TEST_PATH"
 
 # 2) 같은 결과를 ~/Desktop/pytest_log.txt 파일로 저장
-pytest --cov=src --cov-report=term-missing -qq --disable-warnings -rN "$TEST_PATH" > ~/Desktop/pytest_log.txt
+pytest -qq --disable-warnings -rN "$TEST_PATH" > ~/Desktop/pytest_log.txt

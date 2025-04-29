@@ -1,419 +1,162 @@
-"""
-Tool Runner - High-Performance Implementation.
-
-This module provides a runner for executing tools with proper error handling,
-tracking, and async support for high-performance operation.
-"""
-
 import asyncio
 import json
 import traceback
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
-
 from src.config.errors import ErrorCode, ToolError, convert_exception
 from src.config.logger import get_logger
-from src.config.metrics import (
-    TOOL_EXECUTION_DURATION,
-    TOOL_EXECUTIONS_TOTAL,
-    TOOL_ERRORS_TOTAL,
-    track_memory_operation,
-    track_tool_execution,
-    track_tool_execution_completed,
-    track_tool_error
-)
+from src.config.metrics import TOOL_EXECUTION_DURATION, TOOL_EXECUTIONS_TOTAL, TOOL_ERRORS_TOTAL, track_memory_operation, track_memory_operation_completed, track_tool_execution, track_tool_execution_completed, track_tool_error
 from src.tools.base import BaseTool
 from src.utils.timing import AsyncTimer, Timer
-
 logger = get_logger(__name__)
 
-
 class ToolRunner:
-    """
-    High-performance runner for tool execution.
-    
-    This class handles tool execution with comprehensive error handling,
-    retry logic, and performance tracking.
-    """
-    
+
     def __init__(self):
-        """Initialize the tool runner."""
         pass
-    
-    async def run_tool(
-        self,
-        tool: Union[BaseTool, str],
-        tool_registry: Any = None,
-        args: Optional[Dict[str, Any]] = None,
-        retry_count: int = 0,
-        trace_id: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        """
-        Execute a tool asynchronously with tracking and error handling.
-        
-        Args:
-            tool: The tool instance or name to execute.
-            tool_registry: The registry to use if tool is a string name.
-            args: The arguments to pass to the tool.
-            retry_count: The number of times to retry on failure.
-            trace_id: An optional trace ID for logging.
-            
-        Returns:
-            A dictionary containing the result and metadata.
-            
-        Raises:
-            ToolError: If tool execution fails after retries.
-        """
+
+    async def run_tool(self, tool: Union[BaseTool, str], tool_registry: Optional[Any]=None, args: Optional[Dict[str, Any]]=None, retry_count: int=0, trace_id: Optional[str]=None) -> Dict[str, Any]:
         args = args or {}
-        logger_ctx = {"trace_id": trace_id} if trace_id else {}
-        
-        # Get the actual tool instance
-        tool_instance, tool_name = await self._resolve_tool(tool, tool_registry)
-        
-        # Track the tool execution
-        track_tool_execution(tool_name)
-        logger.info(
-            f"Executing tool '{tool_name}'",
-            extra={"tool_name": tool_name, "args": args, **logger_ctx}
-        )
-        
-        # Start timing
-        start_time = asyncio.get_event_loop().time()
-        
+        logger_ctx: Dict[str, Optional[str]] = {'trace_id': trace_id} if trace_id else {}
+        tool_instance: BaseTool
+        tool_name: str
         try:
-            # Execute the tool
-            async with AsyncTimer(f"tool_execution_{tool_name}"):
-                result = await tool_instance.arun(**args)
-            
-            # Calculate execution time
-            execution_time = asyncio.get_event_loop().time() - start_time
-            
-            # Track successful execution
+            tool_instance, tool_name = await self._resolve_tool(tool, tool_registry)
+        except ToolError as resolve_err:
+            logger.error(f"Failed to resolve tool '{str(tool)}': {resolve_err.message}", extra=logger_ctx)
+            return self._format_error(resolve_err, str(tool), 0.0)
+        track_tool_execution(tool_name)
+        logger.info(f"Executing tool '{tool_name}' with args: {args}", extra={'tool_name': tool_name, 'args': args, **logger_ctx})
+        start_time: float = time.monotonic()
+        execution_time: float = 0.0
+        try:
+            result = await tool_instance.arun(**args)
+            execution_time = time.monotonic() - start_time
             track_tool_execution_completed(tool_name, execution_time)
-            
-            # Log success
-            logger.info(
-                f"Tool '{tool_name}' executed successfully in {execution_time:.6f}s",
-                extra={
-                    "tool_name": tool_name,
-                    "execution_time": execution_time,
-                    **logger_ctx
-                }
-            )
-            
-            # Format the result
+            logger.info(f"Tool '{tool_name}' executed successfully in {execution_time:.6f}s", extra={'tool_name': tool_name, 'execution_time': execution_time, **logger_ctx})
             return self._format_result(result, tool_name, execution_time)
-            
         except Exception as e:
-            # Convert to ToolError if needed
-            error = self._handle_tool_error(e, tool_name)
-            
-            # Calculate execution time
-            execution_time = asyncio.get_event_loop().time() - start_time
-            
-            # Log the error
-            logger.error(
-                f"Tool '{tool_name}' execution failed: {error.message}",
-                extra={
-                    "tool_name": tool_name,
-                    "error": error.to_dict(),
-                    "execution_time": execution_time,
-                    **logger_ctx
-                },
-                exc_info=e if not isinstance(e, ToolError) else None
-            )
-            
-            # Track the error
+            execution_time = time.monotonic() - start_time
+            error: ToolError = self._handle_tool_error(e, tool_name)
+            logger.error(f"Tool '{tool_name}' execution failed: {error.message}", extra={'tool_name': tool_name, 'error': error.to_dict(), 'execution_time': execution_time, **logger_ctx}, exc_info=e if not isinstance(e, ToolError) else None)
             track_tool_error(tool_name, str(error.code))
-            
-            # Retry if allowed
             if retry_count > 0:
-                logger.info(
-                    f"Retrying tool '{tool_name}', {retry_count} attempts remaining",
-                    extra={"tool_name": tool_name, "retry_count": retry_count, **logger_ctx}
-                )
-                
-                # Small delay before retry with exponential backoff
-                backoff_time = 0.1 * (2 ** (3 - retry_count))
+                logger.warning(f"Retrying tool '{tool_name}' due to error ({error.code}). Attempts remaining: {retry_count}", extra={'tool_name': tool_name, 'retry_count': retry_count, **logger_ctx})
+                base_delay = 0.2
+                max_delay = 2.0
+                backoff_time = base_delay * (1 + random.random())
                 await asyncio.sleep(backoff_time)
-                
-                return await self.run_tool(
-                    tool=tool_instance,
-                    args=args,
-                    retry_count=retry_count - 1,
-                    trace_id=trace_id
-                )
-            
-            # No more retries, format error response
+                return await self.run_tool(tool=tool_instance, tool_registry=None, args=args, retry_count=retry_count - 1, trace_id=trace_id)
+            logger.error(f"Tool '{tool_name}' ultimately failed after retries (or no retries configured).")
             return self._format_error(error, tool_name, execution_time)
-        
-    
-    
-    async def _resolve_tool(
-        self,
-        tool: Union[BaseTool, str],
-        tool_registry: Any = None
-    ) -> Tuple[BaseTool, str]:
-        """
-        Resolve a tool reference to an actual tool instance.
-        
-        Args:
-            tool: The tool instance or name to resolve.
-            tool_registry: The registry to use if tool is a string name.
-            
-        Returns:
-            A tuple of (tool_instance, tool_name).
-            
-        Raises:
-            ToolError: If the tool cannot be resolved.
-        """
-        # Already a tool instance
+
+    async def _resolve_tool(self, tool: Union[BaseTool, str], tool_registry: Optional[Any]=None) -> Tuple[BaseTool, str]:
         if isinstance(tool, BaseTool):
-            return tool, tool.name
-        
-        # Need to get from registry
-        if isinstance(tool, str) and tool_registry is not None:
-            try:
-                # Import registry module if needed
-                if tool_registry is None:
-                    from src.tools import tool_registry as global_registry
-                    tool_registry = global_registry
-                
-                # Get tool from registry
-                tool_instance = tool_registry.get_tool(tool)
-                return tool_instance, tool
-                
-            except Exception as e:
-                logger.error(
-                    f"Failed to resolve tool '{tool}'",
-                    extra={"tool_name": tool},
-                    exc_info=e
-                )
-                
-                raise ToolError(
-                    code=ErrorCode.TOOL_NOT_FOUND,
-                    message=f"Tool '{tool}' could not be resolved",
-                    details={"name": tool},
-                    original_error=e,
-                    tool_name=tool
-                )
-        
-        # Invalid tool reference
-        raise ToolError(
-            code=ErrorCode.TOOL_VALIDATION_ERROR,
-            message=f"Invalid tool reference: {tool}",
-            details={"tool": str(tool)}
-        )
-    
+            return (tool, tool.name)
+        if isinstance(tool, str):
+            tool_name_str = tool
+            if tool_registry is not None and hasattr(tool_registry, 'get_tool'):
+                try:
+                    resolved_instance: BaseTool = tool_registry.get_tool(tool_name_str)
+                    return (resolved_instance, tool_name_str)
+                except ToolError as registry_err:
+                    logger.error(f"Failed to resolve tool '{tool_name_str}' from registry: {registry_err.message}")
+                    raise registry_err
+                except Exception as e:
+                    logger.error(f"Unexpected error resolving tool '{tool_name_str}' from registry.", exc_info=e)
+                    raise ToolError(code=ErrorCode.TOOL_NOT_FOUND, message=f"Error resolving tool '{tool_name_str}' from registry: {str(e)}", details={'name': tool_name_str}, original_error=e, tool_name=tool_name_str)
+            else:
+                error_msg = f"Tool registry is required to resolve tool by name: '{tool_name_str}'"
+                logger.error(error_msg)
+                raise ToolError(code=ErrorCode.TOOL_VALIDATION_ERROR, message=error_msg, details={'name': tool_name_str})
+        error_msg = f'Invalid tool reference provided. Expected BaseTool instance or tool name string, got: {type(tool)}'
+        logger.error(error_msg)
+        raise ToolError(code=ErrorCode.TOOL_VALIDATION_ERROR, message=error_msg, details={'provided_type': str(type(tool))})
+
     def _handle_tool_error(self, error: Exception, tool_name: str) -> ToolError:
-        """
-        Handle and convert errors that occur during tool execution.
-        
-        Args:
-            error: The exception that occurred.
-            tool_name: The name of the tool that failed.
-            
-        Returns:
-            A standardized ToolError.
-        """
-        # Already a ToolError, just return it
         if isinstance(error, ToolError):
             return error
-        
-        # Convert to ToolError
-        return ToolError(
-            code=ErrorCode.TOOL_EXECUTION_ERROR,
-            message=f"Error executing tool '{tool_name}': {str(error)}",
-            details={
-                "tool_name": tool_name,
-                "error_type": type(error).__name__,
-                "traceback": traceback.format_exc()
-            },
-            original_error=error,
-            tool_name=tool_name
-        )
-    
-    def _format_result(
-        self,
-        result: Any,
-        tool_name: str,
-        execution_time: float
-    ) -> Dict[str, Any]:
-        """
-        Format a successful tool execution result.
-        
-        Args:
-            result: The raw result from the tool.
-            tool_name: The name of the tool that produced the result.
-            execution_time: The time taken to execute the tool.
-            
-        Returns:
-            A formatted result dictionary.
-        """
-        # Try to determine result type for better formatting
+        tb_str = traceback.format_exc()
+        logger.debug(f"Converting general exception to ToolError for tool '{tool_name}'. Traceback:\n{tb_str}")
+        return ToolError(code=ErrorCode.TOOL_EXECUTION_ERROR, message=f"Error executing tool '{tool_name}': {str(error)}", details={'tool_name': tool_name, 'error_type': type(error).__name__, 'traceback': tb_str}, original_error=error, tool_name=tool_name)
+
+    def _format_result(self, result: Any, tool_name: str, execution_time: float) -> Dict[str, Any]:
         result_type = type(result).__name__
-        
-        # Handle different result types
-        if result is None:
-            formatted_result = None
-        elif isinstance(result, (dict, list, str, int, float, bool)):
+        if result is None or isinstance(result, (dict, list, str, int, float, bool)):
             formatted_result = result
         else:
-            # Try to convert to string
             try:
                 formatted_result = str(result)
-            except Exception:
-                formatted_result = "Result could not be formatted"
-        
-        return {
-            "status": "success",
-            "tool_name": tool_name,
-            "execution_time": execution_time,
-            "result_type": result_type,
-            "result": formatted_result
-        }
-    
-    def _format_error(
-        self,
-        error: ToolError,
-        tool_name: str,
-        execution_time: float
-    ) -> Dict[str, Any]:
-        """
-        Format a tool execution error.
-        
-        Args:
-            error: The error that occurred.
-            tool_name: The name of the tool that failed.
-            execution_time: The time taken before failure.
-            
-        Returns:
-            A formatted error dictionary.
-        """
-        return {
-            "status": "error",
-            "tool_name": tool_name,
-            "execution_time": execution_time,
-            "error": {
-                "code": str(error.code),
-                "message": error.message,
-                "details": error.details
-            }
-        }
+            except Exception as str_conv_err:
+                logger.warning(f"Could not convert result of type {result_type} to string for tool '{tool_name}': {str_conv_err}")
+                formatted_result = f'Result of type {result_type} could not be formatted.'
+        return {'status': 'success', 'tool_name': tool_name, 'execution_time': execution_time, 'result_type': result_type, 'result': formatted_result}
 
-    async def _create_tool_task(self, tool_name, tool_args, registry):
-        """
-        Create an async task for running a tool.
-        
-        Args:
-            tool_name: Name of the tool to run
-            tool_args: Arguments to pass to the tool
-            registry: Tool registry to get the tool from
-            
-        Returns:
-            A task to execute the tool
-        """
+    def _format_error(self, error: ToolError, tool_name: str, execution_time: float) -> Dict[str, Any]:
+        return {'status': 'error', 'tool_name': tool_name, 'execution_time': execution_time, 'error': {'code': str(error.code), 'message': error.message, 'details': error.details}}
+
+    async def _create_tool_task(self, tool_name: str, tool_args: Dict[str, Any], registry: Any) -> asyncio.Task[Any]:
         try:
-            # Get the tool from registry
-            tool = registry.get_tool(tool_name)
-            
-            # Create a task (not just a coroutine)
-            return asyncio.create_task(tool.arun(**tool_args))
+            tool: BaseTool = registry.get_tool(tool_name)
+            coro: Coroutine[Any, Any, Any] = tool.arun(**tool_args)
+            return asyncio.create_task(coro, name=f'tool_task_{tool_name}')
         except Exception as e:
-            # If there's an error creating the task, return a future with the exception
-            future = asyncio.Future()
+            logger.error(f"Failed to create task for tool '{tool_name}': {e}", exc_info=True)
+            future: asyncio.Future[Any] = asyncio.Future()
             future.set_exception(e)
-            return future
 
-    async def run_tools_parallel(self, tools_config, registry, timeout=None):
-        """
-        Run multiple tools in parallel with timeout.
-        
-        Args:
-            tools_config: List of tool configurations with name and args
-            registry: The tool registry to use
-            timeout: Optional timeout in seconds
-            
-        Returns:
-            List of tool results
-        """
-        tasks = []
-        names = []
-        results = []
-        
-        # Create tasks for each tool
+            async def raise_exception_task():
+                raise e
+            return asyncio.create_task(raise_exception_task(), name=f'tool_task_{tool_name}_error')
+
+    async def run_tools_parallel(self, tools_config: List[Dict[str, Any]], registry: Any, timeout: Optional[float]=None) -> List[Dict[str, Any]]:
+        tasks: List[asyncio.Task[Any]] = []
+        tool_names: List[str] = []
+        results: List[Dict[str, Any]] = []
+        logger.info(f'Running {len(tools_config)} tools in parallel (timeout: {timeout}s)')
         for tool_config in tools_config:
-            tool_name = tool_config["name"]
-            tool_args = tool_config.get("args", {})
-            names.append(tool_name)
-            
-            # Create task for this tool
+            tool_name = tool_config.get('name')
+            if not tool_name or not isinstance(tool_name, str):
+                logger.warning(f'Invalid or missing tool name in config: {tool_config}. Skipping.')
+                results.append({'status': 'error', 'tool_name': 'unknown', 'error': 'Invalid tool config'})
+                tool_names.append('unknown')
+                tasks.append(asyncio.create_task(asyncio.sleep(0)))
+                continue
+            tool_args = tool_config.get('args', {})
+            tool_names.append(tool_name)
             task = await self._create_tool_task(tool_name, tool_args, registry)
             tasks.append(task)
-        
-        # Run all tasks with timeout handling
         if tasks:
-            if timeout:
-                # Create a main task with timeout
+            done: Set[asyncio.Task[Any]]
+            pending: Set[asyncio.Task[Any]]
+            try:
+                done, pending = await asyncio.wait(tasks, timeout=timeout, return_when=asyncio.ALL_COMPLETED)
+                logger.debug(f'Parallel tool execution wait completed. Done: {len(done)}, Pending: {len(pending)}')
+            except asyncio.CancelledError:
+                logger.warning('Parallel tool execution was cancelled.')
+                done = set()
+                pending = set(tasks)
+            except Exception as wait_err:
+                logger.error(f'Error during asyncio.wait for parallel tools: {wait_err}', exc_info=True)
+                results = [{'status': 'error', 'tool_name': name, 'error': f'Wait Error: {str(wait_err)}'} for name in tool_names]
+                return results
+            final_results: List[Dict[str, Any]] = [{} for _ in range(len(tasks))]
+            for task in done:
+                idx = tasks.index(task)
+                tool_name_done = tool_names[idx]
                 try:
-                    # Wait for all tasks with a single timeout
-                    done, pending = await asyncio.wait(
-                        tasks, 
-                        timeout=timeout,
-                        return_when=asyncio.ALL_COMPLETED
-                    )
-                    
-                    # Process completed tasks
-                    for i, task in enumerate(tasks):
-                        if task in done:
-                            try:
-                                result = task.result()
-                                results.append({
-                                    "status": "success",
-                                    "result": result
-                                })
-                            except Exception as e:
-                                results.append({
-                                    "status": "error",
-                                    "error": str(e)
-                                })
-                        else:
-                            # This task timed out
-                            task.cancel()  # Cancel the pending task
-                            results.append({
-                                "status": "error",
-                                "error": f"Tool execution timed out after {timeout} seconds"
-                            })
-                    
+                    result: Any = task.result()
+                    final_results[idx] = {'status': 'success', 'tool_name': tool_name_done, 'result': result}
                 except Exception as e:
-                    # Handle unexpected errors in the wait itself
-                    results.append({
-                        "status": "error",
-                        "error": f"Error in parallel execution: {str(e)}"
-                    })
-            else:
-                # No timeout, run all tasks to completion
-                try:
-                    # Wait for all tasks to complete
-                    done, _ = await asyncio.wait(tasks, return_when=asyncio.ALL_COMPLETED)
-                    
-                    # Process results
-                    for i, task in enumerate(tasks):
-                        try:
-                            result = task.result()
-                            results.append({
-                                "status": "success",
-                                "result": result
-                            })
-                        except Exception as e:
-                            results.append({
-                                "status": "error",
-                                "error": str(e)
-                            })
-                except Exception as e:
-                    # Handle unexpected errors in the wait itself
-                    results.append({
-                        "status": "error",
-                        "error": f"Error in parallel execution: {str(e)}"
-                    })
-        
-        return results
+                    logger.warning(f"Tool '{tool_name_done}' in parallel execution failed: {e}")
+                    error_obj = e if isinstance(e, ToolError) else self._handle_tool_error(e, tool_name_done)
+                    final_results[idx] = self._format_error(error_obj, tool_name_done, 0.0)
+            for task in pending:
+                idx = tasks.index(task)
+                tool_name_pending = tool_names[idx]
+                task.cancel()
+                logger.warning(f"Tool '{tool_name_pending}' did not complete within timeout or was cancelled.")
+                timeout_error = ToolError(code=ErrorCode.TOOL_TIMEOUT, message=f"Tool '{tool_name_pending}' timed out after {timeout} seconds", tool_name=tool_name_pending)
+                final_results[idx] = self._format_error(timeout_error, tool_name_pending, timeout or 0.0)
+            return final_results
+        else:
+            return []

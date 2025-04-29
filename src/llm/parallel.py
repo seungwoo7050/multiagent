@@ -1,442 +1,260 @@
-"""
-Parallel execution utilities for LLM operations.
-
-This module provides functions for executing LLM requests in parallel
-and for racing multiple models to get the fastest response.
-"""
-
 import asyncio
 import time
-from typing import Any, Callable, Dict, List, Optional, Tuple, TypeVar, Union, cast
+from typing import Any, Callable, Dict, List, Optional, Tuple, TypeVar, Union, cast, Coroutine
 from functools import wraps
-
 from src.llm.adapters import get_adapter
+from src.llm.base import BaseLLMAdapter
+from src.core.mcp.llm.context_transform import transform_llm_input_for_model
 from src.config.logger import get_logger
 from src.config.settings import get_settings
-from src.config.metrics import (
-    MEMORY_OPERATION_DURATION,
-    LLM_REQUESTS_TOTAL,
-    LLM_FALLBACKS_TOTAL,
-    track_llm_fallback,
-    timed_metric
-)
+from src.config.metrics import MEMORY_OPERATION_DURATION, LLM_REQUESTS_TOTAL, LLM_FALLBACKS_TOTAL, track_llm_fallback, timed_metric
 from src.config.errors import LLMError, ErrorCode
-
 settings = get_settings()
 logger = get_logger(__name__)
-
 T = TypeVar('T')
 
-
-@timed_metric(MEMORY_OPERATION_DURATION, {"operation_type": "execute_parallel"})
-async def execute_parallel(
-    operations: List[Callable[[], Any]],
-    timeout: Optional[float] = None,
-    return_exceptions: bool = False,
-    cancel_on_first_exception: bool = False,
-    cancel_on_first_result: bool = False,
-    max_wait_time: float = 1.0
-) -> List[Any]:
-    """
-    Execute multiple async operations in parallel.
-    
-    Args:
-        operations: List of async callables to execute
-        timeout: Total timeout for all operations
-        return_exceptions: Whether to return exceptions instead of raising them
-        cancel_on_first_exception: Whether to cancel all tasks if one raises an exception
-        cancel_on_first_result: Whether to cancel remaining tasks when first result is ready
-        max_wait_time: Maximum time to wait in each asyncio.wait call to prevent starvation
-        
-    Returns:
-        List[Any]: Results in the same order as the operations
-    """
+@timed_metric(MEMORY_OPERATION_DURATION, {'operation_type': 'execute_parallel'})
+async def execute_parallel(operations: List[Callable[[], Coroutine[Any, Any, Any]]], timeout: Optional[float]=None, return_exceptions: bool=False, cancel_on_first_exception: bool=False, cancel_on_first_result: bool=False, max_wait_time: float=1.0) -> List[Any]:
     if not operations:
         return []
-    
-    # Default timeout from settings if not specified
     if timeout is None:
         timeout = settings.REQUEST_TIMEOUT
-    
-    # Use a more efficient task tracking mechanism
-    task_map = {}
-    results = [None] * len(operations)
-    
-    start_time = time.time()
-    deadline = start_time + timeout
-    
-    # Create and track tasks with their indices
+    task_map: Dict[asyncio.Task[Any], int] = {}
+    results: List[Optional[Any]] = [None] * len(operations)
+    exceptions: List[Tuple[int, Exception]] = []
+    pending: Set[asyncio.Task[Any]] = set()
+    start_time: float = time.monotonic()
+    deadline: float = start_time + timeout
     for i, op in enumerate(operations):
-        task = asyncio.create_task(op())
-        task_map[task] = i
-    
-    pending = set(task_map.keys())
-    exceptions = []
-    
+        try:
+            task: asyncio.Task[Any] = asyncio.create_task(op())
+            task_map[task] = i
+            pending.add(task)
+        except Exception as task_creation_e:
+            logger.error(f'Failed to create task for operation at index {i}: {task_creation_e}')
+            if return_exceptions:
+                results[i] = task_creation_e
+            else:
+                exceptions.append((i, task_creation_e))
     try:
-        while pending and time.time() < deadline:
-            # Calculate remaining time
-            remaining_time = deadline - time.time()
+        while pending and time.monotonic() < deadline:
+            remaining_time: float = deadline - time.monotonic()
             if remaining_time <= 0:
+                logger.debug('Parallel execution timeout reached.')
                 break
-            
-            # Use shorter of remaining time or max_wait_time to prevent starvation
-            wait_time = min(remaining_time, max_wait_time)
-            
-            # Wait for tasks to complete
-            done, pending = await asyncio.wait(
-                pending,
-                timeout=wait_time,
-                return_when=asyncio.FIRST_COMPLETED
-            )
-            
-            if not done:  # Timeout occurred
+            wait_time: float = min(remaining_time, max_wait_time)
+            done: Set[asyncio.Task[Any]]
+            pending: Set[asyncio.Task[Any]]
+            try:
+                done, pending = await asyncio.wait(pending, timeout=wait_time, return_when=asyncio.FIRST_COMPLETED)
+            except asyncio.CancelledError:
+                logger.warning('execute_parallel wait was cancelled.')
+                raise
+            if not done:
+                logger.debug(f'No tasks completed within wait_time ({wait_time}s).')
                 continue
-            
-            # Process completed tasks
             for task in done:
-                idx = task_map[task]
-                
+                idx: int = task_map[task]
                 try:
-                    result = task.result()
+                    result: Any = task.result()
                     results[idx] = result
-                    
-                    # Cancel remaining tasks if requested
+                    logger.debug(f'Task {idx} completed successfully.')
                     if cancel_on_first_result:
+                        logger.info(f'First result received (task {idx}). Cancelling remaining {len(pending)} tasks.')
                         for t in pending:
                             t.cancel()
                         pending = set()
                         break
-                        
+                except asyncio.CancelledError:
+                    logger.warning(f'Task {idx} was cancelled.')
+                    if return_exceptions:
+                        results[idx] = asyncio.CancelledError(f'Task {idx} was cancelled.')
+                    else:
+                        exceptions.append((idx, asyncio.CancelledError(f'Task {idx} was cancelled.')))
                 except Exception as e:
-                    logger.debug(f"Task {idx} failed with error: {str(e)}")
+                    logger.debug(f'Task {idx} failed with error: {e}')
                     if return_exceptions:
                         results[idx] = e
                     else:
                         exceptions.append((idx, e))
-                        
-                        # Cancel remaining tasks if requested
                         if cancel_on_first_exception:
+                            logger.warning(f'First exception occurred (task {idx}). Cancelling remaining {len(pending)} tasks.')
                             for t in pending:
                                 t.cancel()
                             pending = set()
                             break
-            
-            # If there are exceptions and we're not returning them, raise the first one
-            if exceptions and not return_exceptions:
-                idx, error = exceptions[0]
-                logger.error(f"Operation {idx} failed: {str(error)}")
-                raise error
-    
+            if not pending:
+                break
+            if exceptions and (not return_exceptions) and cancel_on_first_exception:
+                break
+            if cancel_on_first_result and any((res is not None for res in results)):
+                break
+        if exceptions and (not return_exceptions):
+            idx, error = exceptions[0]
+            logger.error(f'Parallel operation {idx} failed: {error}')
+            raise error
     finally:
-        # Determine which tasks timed out
-        timed_out = [task_map[t] for t in pending]
-        if timed_out:
-            logger.warning(f"Operations timed out: {timed_out}")
-            
-        # Ensure all pending tasks are properly cancelled
-        for task in pending:
-            task.cancel()
-        
-        # Wait for cancellations to complete
+        timed_out_indices: List[int] = [task_map[t] for t in pending]
+        if timed_out_indices:
+            logger.warning(f'Parallel operations timed out or were cancelled for indices: {timed_out_indices}')
         if pending:
-            try:
-                await asyncio.gather(*pending, return_exceptions=True)
-            except (asyncio.CancelledError, Exception):
-                pass
-    
-    # Mark timed out tasks with timeout exceptions if requested
+            logger.debug(f'Ensuring cancellation of {len(pending)} remaining pending tasks.')
+            for task in pending:
+                task.cancel()
+            await asyncio.gather(*pending, return_exceptions=True)
     if return_exceptions:
-        for i in range(len(results)):
-            if results[i] is None and i in [task_map[t] for t in pending]:
-                results[i] = asyncio.TimeoutError(f"Operation {i} timed out after {timeout}s")
-    
-    return results
+        current_time = time.monotonic()
+        if current_time >= deadline:
+            for i in range(len(results)):
+                if results[i] is None and i in timed_out_indices:
+                    results[i] = asyncio.TimeoutError(f'Operation {i} timed out after {timeout}s')
+    return cast(List[Any], results)
 
+async def _create_adapters_concurrently(models: List[str]) -> Dict[str, BaseLLMAdapter]:
 
-async def _create_adapters_concurrently(models: List[str]) -> Dict[str, Any]:
-    """Create multiple adapters concurrently."""
-    async def create_single_adapter(model: str):
+    async def create_single_adapter(model: str) -> Tuple[str, Optional[BaseLLMAdapter]]:
         try:
-            adapter = await get_adapter(model)
-            return model, adapter
+            adapter = get_adapter(model)
+            await adapter.ensure_initialized()
+            return (model, adapter)
         except Exception as e:
-            logger.warning(f"Failed to create adapter for model {model}: {str(e)}")
-            return model, e
-    
-    # Create all adapters concurrently
-    tasks = [create_single_adapter(model) for model in models]
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-    
-    # Filter out failures and construct the map
-    adapter_map = {}
-    for model, result in results:
-        if not isinstance(result, Exception):
-            adapter_map[model] = result
-    
+            logger.warning(f"Failed to create or initialize adapter for model '{model}': {str(e)}")
+            return (model, None)
+    adapter_results: List[Tuple[str, Optional[BaseLLMAdapter]]] = await asyncio.gather(*[create_single_adapter(model) for model in models], return_exceptions=False)
+    adapter_map: Dict[str, BaseLLMAdapter] = {}
+    for model, adapter_instance in adapter_results:
+        if adapter_instance is not None:
+            adapter_map[model] = adapter_instance
+    logger.debug(f'Concurrently created {len(adapter_map)} adapters out of {len(models)} requested.')
     return adapter_map
 
-
-@timed_metric(MEMORY_OPERATION_DURATION, {"operation_type": "race_models"})
-async def race_models(
-    models: List[str],
-    prompt: str,
-    max_tokens: Optional[int] = None,
-    temperature: Optional[float] = None,
-    top_p: Optional[float] = None,
-    additional_params: Optional[Dict[str, Any]] = None,
-    timeout: Optional[float] = None,
-    track_metrics: bool = True
-) -> Tuple[str, Dict[str, Any]]:
-    """
-    Race multiple models to get the fastest response.
-    
-    Args:
-        models: List of model names to race
-        prompt: The prompt to send to each model
-        max_tokens: Maximum tokens to generate
-        temperature: Sampling temperature
-        top_p: Top-p sampling parameter
-        additional_params: Additional parameters to pass to the LLM
-        timeout: Timeout for the entire race
-        track_metrics: Whether to track metrics
-        
-    Returns:
-        Tuple[str, Dict[str, Any]]: Winning model name and its response
-        
-    Raises:
-        LLMError: If all models fail
-    """
+@timed_metric(MEMORY_OPERATION_DURATION, {'operation_type': 'race_models'})
+async def race_models(models: List[str], prompt: Union[str, List[Dict[str, str]]], max_tokens: Optional[int]=None, temperature: Optional[float]=None, top_p: Optional[float]=None, additional_params: Optional[Dict[str, Any]]=None, timeout: Optional[float]=None, track_metrics: bool=True) -> Tuple[str, Dict[str, Any]]:
     if not models:
-        raise ValueError("At least one model must be provided")
-    
-    # Default timeout from settings if not specified
+        raise ValueError('At least one model must be provided for race_models')
     if timeout is None:
         timeout = settings.REQUEST_TIMEOUT
-    
-    start_time = time.time()
+    start_time = time.monotonic()
     additional_params = additional_params or {}
-    
-    # Create all adapters concurrently
-    adapter_map = await _create_adapters_concurrently(models)
-    if not adapter_map:
-        raise LLMError(
-            code=ErrorCode.LLM_API_ERROR,
-            message="Failed to create adapters for all models",
-            details={"models": models}
-        )
-    
-    # Set up per-model operations
-    operations = []
-    
-    for model in models:  # Use original models list to maintain order
-        adapter = adapter_map.get(model)
-        if not adapter:
-            continue
-            
-        async def generate_for_model(m=model, a=adapter):
+    try:
+        adapter_map: Dict[str, BaseLLMAdapter] = await _create_adapters_concurrently(models)
+        if not adapter_map:
+            raise LLMError(code=ErrorCode.LLM_PROVIDER_ERROR, message='Failed to create adapters for any of the specified models', details={'models': models})
+        adapter_creation_time: float = time.monotonic() - start_time
+        remaining_timeout: float = max(0.1, timeout - adapter_creation_time)
+        logger.debug(f'Adapters created in {adapter_creation_time:.3f}s. Remaining race timeout: {remaining_timeout:.3f}s')
+    except Exception as adapter_err:
+        raise LLMError(code=ErrorCode.LLM_PROVIDER_ERROR, message='Error during adapter creation for race_models', original_error=adapter_err) from adapter_err
+    operations: List[Callable[[], Coroutine[Any, Any, Any]]] = []
+    valid_models_in_race: List[str] = list(adapter_map.keys())
+    for model_name in valid_models_in_race:
+        adapter: BaseLLMAdapter = adapter_map[model_name]
+
+        async def generate_for_model(adapter_instance: BaseLLMAdapter=adapter, model_id: str=model_name) -> Dict[str, Any]:
             if track_metrics:
-                LLM_REQUESTS_TOTAL.labels(model=m).inc()
-            
+                track_llm_request(model_id, adapter_instance.provider)
             try:
-                response = await a.generate(
-                    prompt=prompt,
-                    max_tokens=max_tokens,
-                    temperature=temperature,
-                    top_p=top_p,
-                    **additional_params
-                )
-                return {"model": m, "response": response, "success": True}
+                response: Dict[str, Any] = await adapter_instance.generate(prompt=prompt, max_tokens=max_tokens, temperature=temperature, top_p=top_p, **additional_params)
+                return {'model': model_id, 'response': response, 'success': True}
             except Exception as e:
-                error = e if isinstance(e, LLMError) else LLMError(
-                    code=ErrorCode.LLM_API_ERROR,
-                    message=f"Error in model {m}: {str(e)}",
-                    model=m,
-                    original_error=e
-                )
-                return {"model": m, "error": error, "success": False}
-        
+                logger.warning(f"Model '{model_id}' failed during race: {e}")
+                error: LLMError = e if isinstance(e, LLMError) else LLMError(code=ErrorCode.LLM_API_ERROR, message=f'Error in model {model_id} during race: {str(e)}', model=model_id, provider=adapter_instance.provider, original_error=e)
+                return {'model': model_id, 'error': error, 'success': False}
         operations.append(generate_for_model)
-    
-    # Execute the race with our operations
-    adapter_creation_time = time.time() - start_time
-    remaining_timeout = max(0.1, timeout - adapter_creation_time)
-    
-    # Execute operations with race semantics
-    results = await execute_parallel(
-        operations=operations,
-        timeout=remaining_timeout,
-        return_exceptions=True,
-        cancel_on_first_result=True
-    )
-    
-    # Process results - look for the first successful one
-    successful_results = []
-    errors = []
-    
-    for result in results:
-        if isinstance(result, Exception):
-            errors.append(str(result))
+    logger.info(f'Starting model race for {len(operations)} models with timeout {remaining_timeout:.3f}s')
+    results: List[Any] = await execute_parallel(operations=operations, timeout=remaining_timeout, return_exceptions=True, cancel_on_first_result=True)
+    successful_result: Optional[Dict[str, Any]] = None
+    errors_encountered: Dict[str, str] = {}
+    for i, result_or_exc in enumerate(results):
+        model_raced = valid_models_in_race[i]
+        if isinstance(result_or_exc, Exception):
+            errors_encountered[model_raced] = f'Execution Error: {str(result_or_exc)}'
             continue
-            
-        if result and result.get("success"):
-            successful_results.append(result)
-    
-    # Find the winner (first successful result)
-    if successful_results:
-        winner = successful_results[0]
-        winning_model = winner["model"]
-        response = winner["response"]
-        
-        # Track metrics if this wasn't the primary model
-        if track_metrics and winning_model != models[0]:
-            track_llm_fallback(models[0], winning_model)
-            
-        race_time = time.time() - start_time
-        logger.info(f"Model race won by {winning_model} in {race_time:.3f}s")
-        
-        return winning_model, response
-    
-    # If we get here, all models failed
-    error_details = {}
-    for result in results:
-        if isinstance(result, Exception):
-            error_details[str(id(result))] = str(result)
-        elif result and not result.get("success"):
-            error_details[result["model"]] = str(result.get("error", "Unknown error"))
-    
-    raise LLMError(
-        code=ErrorCode.LLM_API_ERROR,
-        message=f"All models failed in race: {', '.join(models)}",
-        details={"models": models, "errors": error_details}
-    )
+        if isinstance(result_or_exc, dict):
+            if result_or_exc.get('success'):
+                successful_result = result_or_exc
+                break
+            else:
+                error_obj = result_or_exc.get('error')
+                errors_encountered[model_raced] = str(error_obj) if error_obj else 'Unknown failure'
+        else:
+            errors_encountered[model_raced] = f'Unexpected result type: {type(result_or_exc)}'
+    if successful_result:
+        winner_model: str = successful_result['model']
+        response: Dict[str, Any] = successful_result['response']
+        race_duration: float = time.monotonic() - start_time
+        primary_model = models[0]
+        if track_metrics and winner_model != primary_model:
+            track_llm_fallback(primary_model, winner_model)
+        logger.info(f"Model race won by '{winner_model}' in {race_duration:.3f}s.")
+        return (winner_model, response)
+    else:
+        race_duration: float = time.monotonic() - start_time
+        error_msg = f'All models failed or timed out in race ({', '.join(models)}) after {race_duration:.3f}s.'
+        logger.error(error_msg, extra={'errors': errors_encountered})
+        raise LLMError(code=ErrorCode.LLM_API_ERROR, message=error_msg, details={'models': models, 'errors': errors_encountered, 'duration_s': race_duration})
 
-
-@timed_metric(MEMORY_OPERATION_DURATION, {"operation_type": "execute_with_fallbacks"})
-async def execute_with_fallbacks(
-    primary_model: str,
-    fallback_models: List[str],
-    prompt: str,
-    max_tokens: Optional[int] = None,
-    temperature: Optional[float] = None,
-    top_p: Optional[float] = None,
-    additional_params: Optional[Dict[str, Any]] = None,
-    timeout: Optional[float] = None,
-    track_metrics: bool = True
-) -> Tuple[str, Dict[str, Any]]:
-    """
-    Execute a request with the primary model, falling back to others if it fails.
-    
-    Args:
-        primary_model: Primary model to try first
-        fallback_models: Ordered list of fallback models to try
-        prompt: The prompt to send to each model
-        max_tokens: Maximum tokens to generate
-        temperature: Sampling temperature
-        top_p: Top-p sampling parameter
-        additional_params: Additional parameters to pass to the LLM
-        timeout: Timeout for the entire operation
-        track_metrics: Whether to track metrics
-        
-    Returns:
-        Tuple[str, Dict[str, Any]]: Model name used and its response
-        
-    Raises:
-        LLMError: If all models fail
-    """
-    # Combine primary and fallbacks into a single list
-    all_models = [primary_model] + fallback_models
-    
-    # Default timeout from settings if not specified
+@timed_metric(MEMORY_OPERATION_DURATION, {'operation_type': 'execute_with_fallbacks'})
+async def execute_with_fallbacks(primary_model: str, fallback_models: List[str], prompt: Union[str, List[Dict[str, str]]], max_tokens: Optional[int]=None, temperature: Optional[float]=None, top_p: Optional[float]=None, additional_params: Optional[Dict[str, Any]]=None, timeout: Optional[float]=None, track_metrics: bool=True) -> Tuple[str, Dict[str, Any]]:
+    if not primary_model:
+        raise ValueError('primary_model must be provided for execute_with_fallbacks')
+    all_models_to_try: List[str] = [primary_model] + fallback_models
     if timeout is None:
         timeout = settings.REQUEST_TIMEOUT
-    
-    start_time = time.time()
+    start_time: float = time.monotonic()
     additional_params = additional_params or {}
-    errors = {}
-    
-    # Create adapters concurrently at the start to save time
-    adapter_map = await _create_adapters_concurrently(all_models)
-    adapter_creation_time = time.time() - start_time
-    
-    # Try each model in sequence
-    for model in all_models:
-        # Skip if we couldn't create an adapter
-        if model not in adapter_map:
-            errors[model] = f"Failed to create adapter for model {model}"
+    errors: Dict[str, Union[Exception, str]] = {}
+    try:
+        adapter_map: Dict[str, BaseLLMAdapter] = await _create_adapters_concurrently(all_models_to_try)
+        adapter_creation_time: float = time.monotonic() - start_time
+        logger.debug(f'Adapters created/initialized in {adapter_creation_time:.3f}s for fallback execution.')
+        request_timeout_budget: float = max(0.1, timeout - adapter_creation_time)
+    except Exception as adapter_err:
+        raise LLMError(code=ErrorCode.LLM_PROVIDER_ERROR, message='Error during adapter creation for execute_with_fallbacks', original_error=adapter_err) from adapter_err
+    for model_name in all_models_to_try:
+        if model_name not in adapter_map:
+            error_msg = f"Adapter creation failed for model '{model_name}', skipping."
+            errors[model_name] = error_msg
+            logger.warning(error_msg)
             continue
-            
-        adapter = adapter_map[model]
-        model_start_time = time.time()
-        
-        # Calculate remaining timeout
-        elapsed = time.time() - start_time
-        remaining_timeout = timeout - elapsed
-        
-        if remaining_timeout <= 0.1:  # Give at least 100ms
-            errors[model] = "Timeout exceeded before trying model"
-            continue
-        
-        # Track the request if metrics are enabled
+        adapter: BaseLLMAdapter = adapter_map[model_name]
+        model_start_time: float = time.monotonic()
+        elapsed_time: float = model_start_time - start_time
+        remaining_timeout_for_this_call: float = request_timeout_budget - elapsed_time
+        if remaining_timeout_for_this_call <= 0.1:
+            error_msg = f"Timeout exceeded before trying model '{model_name}'."
+            errors[model_name] = error_msg
+            logger.warning(error_msg)
+            break
+        logger.info(f"Attempting request with model '{model_name}' (Timeout: {remaining_timeout_for_this_call:.3f}s)")
         if track_metrics:
-            LLM_REQUESTS_TOTAL.labels(model=model).inc()
-        
+            track_llm_request(model_name, adapter.provider)
         try:
-            # Execute with a timeout wrapper to ensure we don't exceed our budget
-            async def execute_with_timeout():
-                return await adapter.generate(
-                    prompt=prompt,
-                    max_tokens=max_tokens,
-                    temperature=temperature,
-                    top_p=top_p,
-                    **(additional_params or {})
-                )
-                
-            # Create a task with timeout
-            task = asyncio.create_task(execute_with_timeout())
-            
-            try:
-                result = await asyncio.wait_for(task, timeout=remaining_timeout)
-            except asyncio.TimeoutError:
-                # Cancel the task if it timed out
-                task.cancel()
-                try:
-                    await task
-                except (asyncio.CancelledError, Exception):
-                    pass
-                raise TimeoutError(f"Model {model} timed out after {remaining_timeout:.2f}s")
-            
-            # Success - track metrics and return
-            if track_metrics and model != primary_model:
-                track_llm_fallback(primary_model, model)
-            
-            model_time = time.time() - model_start_time
-            logger.info(f"Model {model} succeeded in {model_time:.3f}s" +
-                        (f" (fallback from {primary_model})" if model != primary_model else ""))
-            
-            return model, result
-            
+            transformed_prompt = await transform_llm_input_for_model(original_input=prompt, target_adapter=adapter)
+            response: Dict[str, Any] = await asyncio.wait_for(adapter.generate(prompt=transformed_prompt, max_tokens=max_tokens, temperature=temperature, top_p=top_p, **additional_params or {}), timeout=remaining_timeout_for_this_call)
+            success_model: str = model_name
+            model_execution_time: float = time.monotonic() - model_start_time
+            if track_metrics and success_model != primary_model:
+                track_llm_fallback(primary_model, success_model)
+            log_msg = f"Successfully executed with model '{success_model}' in {model_execution_time:.3f}s"
+            if success_model != primary_model:
+                log_msg += f" (fallback from '{primary_model}')"
+            logger.info(log_msg)
+            return (success_model, response)
         except Exception as e:
-            # Log the error and continue to the next model
-            errors[model] = e
-            logger.warning(f"Model {model} failed, trying next fallback: {str(e)}")
-    
-    # If we get here, all models failed
-    total_time = time.time() - start_time
-    
-    # Format detailed error information
-    error_details = {}
-    for model, error in errors.items():
-        if isinstance(error, Exception):
-            error_details[model] = {
-                "type": type(error).__name__,
-                "message": str(error)
-            }
-        else:
-            error_details[model] = {"message": str(error)}
-    
-    raise LLMError(
-        code=ErrorCode.LLM_API_ERROR,
-        message=f"All models failed in {total_time:.3f}s",
-        details={"models": all_models, "errors": error_details}
-    )
+            immediate_fallback = should_fallback_immediately(e)
+            if immediate_fallback:
+                errors[model_name] = e
+                logger.warning(f"Model '{model_name}' failed with non-retryable error ({type(e).__name__}). Falling back immediately. Error: {str(e)}")
+                if track_metrics:
+                    track_llm_error(model_name, adapter.provider, type(e).__name__)
+            else:
+                errors[model_name] = e
+                logger.warning(f"Model '{model_name}' failed with potentially retryable error: {e}. Trying next fallback model.")
+                if track_metrics:
+                    track_llm_error(model_name, adapter.provider, type(e).__name__)
+    total_duration: float = time.monotonic() - start_time
+    final_error_msg = f'All models failed ({', '.join(all_models_to_try)}) after {total_duration:.3f}s.'
+    error_details: Dict[str, str] = {model: str(err) for model, err in errors.items()}
+    logger.error(final_error_msg, extra={'errors': error_details})
+    raise LLMError(code=ErrorCode.LLM_API_ERROR, message=final_error_msg, details={'models_tried': all_models_to_try, 'errors': error_details, 'total_duration_s': total_duration})
