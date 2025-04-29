@@ -2,20 +2,26 @@ import importlib
 import datetime
 import json
 import uuid
+import dataclasses
 from enum import Enum
 from typing import Any, Dict, List, Optional, Set, Tuple, Type, Union
 import msgpack
 from pydantic import BaseModel
 from src.config.logger import get_logger
 from src.core.exceptions import SerializationError
+
 logger = get_logger(__name__)
 _ENUM_REGISTRY: Dict[str, Type[Enum]] = {}
+
+# Determine Pydantic version once at import time
+_PYDANTIC_V2 = hasattr(BaseModel, "model_dump")
 
 class SerializationFormat(str, Enum):
     JSON = 'json'
     MSGPACK = 'msgpack'
 
 def _default_encoder(obj: Any) -> Any:
+    """Enhanced encoder with support for more types"""
     if isinstance(obj, datetime.datetime):
         return {'__type__': 'datetime', 'value': obj.isoformat()}
     elif isinstance(obj, datetime.date):
@@ -33,10 +39,21 @@ def _default_encoder(obj: Any) -> Any:
         _ENUM_REGISTRY[class_path] = obj.__class__
         return {'__type__': 'enum', 'class': class_path, 'value': obj.value}
     elif isinstance(obj, BaseModel):
-        return {'__type__': 'model', 'class': f'{obj.__class__.__module__}.{obj.__class__.__name__}', 'value': obj.dict()}
+        return {'__type__': 'model', 
+                'class': f'{obj.__class__.__module__}.{obj.__class__.__name__}', 
+                'value': model_to_dict(obj)}
+    elif dataclasses.is_dataclass(obj):
+        return {'__type__': 'dataclass',
+                'class': f'{obj.__class__.__module__}.{obj.__class__.__name__}',
+                'value': dataclasses.asdict(obj)}
+    # Support for numpy types
+    elif hasattr(obj, 'dtype') and hasattr(obj, 'tolist'):
+        return {'__type__': 'ndarray', 'value': obj.tolist()}
     elif hasattr(obj, '__dict__'):
-        return {'__type__': 'object', 'class': f'{obj.__class__.__module__}.{obj.__class__.__name__}', 'value': obj.__dict__}
-    raise TypeError(f'Object of type {type(obj)} is not serializable by _default_encoder')
+        return {'__type__': 'object', 
+                'class': f'{obj.__class__.__module__}.{obj.__class__.__name__}', 
+                'value': obj.__dict__}
+    raise TypeError(f'Object of type {type(obj)} is not serializable')
 
 def _object_hook(obj: Dict[str, Any]) -> Any:
     if not isinstance(obj, dict) or '__type__' not in obj:
@@ -159,7 +176,7 @@ def serialize(data: Any, format: SerializationFormat=SerializationFormat.MSGPACK
             raise ValueError(f'Unsupported serialization format: {format}')
         return result
     except Exception as e:
-        logger.exception(f'Serialization error: {e}')
+        # Remove redundant logging - the exception will be logged where it's caught
         raise SerializationError(message=f'Failed to serialize data: {str(e)}', original_error=e)
 
 def deserialize(data: bytes, format: SerializationFormat=SerializationFormat.MSGPACK, cls: Optional[Type]=None) -> Any:
@@ -172,7 +189,10 @@ def deserialize(data: bytes, format: SerializationFormat=SerializationFormat.MSG
             raise ValueError(f'Unsupported serialization format: {format}')
         if cls and result is not None:
             if issubclass(cls, BaseModel):
-                return cls.parse_obj(result)
+                if _PYDANTIC_V2:
+                    return cls.model_validate(result)
+                else:
+                    return cls.parse_obj(result)
             elif hasattr(cls, 'from_dict') and callable(getattr(cls, 'from_dict')):
                 return cls.from_dict(result)
             else:
@@ -182,7 +202,7 @@ def deserialize(data: bytes, format: SerializationFormat=SerializationFormat.MSG
                     raise SerializationError(f'Failed to instantiate {cls.__name__} with deserialized data: {te}', original_error=te)
         return result
     except Exception as e:
-        logger.exception(f'Deserialization error: {e}')
+        # Remove redundant logging
         raise SerializationError(message=f'Failed to deserialize data: {str(e)}', original_error=e)
 
 def serialize_to_json(data: Any, pretty: bool=False) -> str:
@@ -190,7 +210,7 @@ def serialize_to_json(data: Any, pretty: bool=False) -> str:
         indent = 2 if pretty else None
         return json.dumps(data, default=_default_encoder, ensure_ascii=False, indent=indent)
     except Exception as e:
-        logger.exception(f'JSON serialization error: {e}')
+        # Remove redundant logging
         raise SerializationError(message=f'Failed to serialize to JSON: {str(e)}', original_error=e)
 
 def deserialize_from_json(data: str, cls: Optional[Type]=None) -> Any:
@@ -198,9 +218,9 @@ def deserialize_from_json(data: str, cls: Optional[Type]=None) -> Any:
         result = json.loads(data, object_hook=_object_hook)
         if cls and result is not None:
             if issubclass(cls, BaseModel):
-                try:
+                if _PYDANTIC_V2:
                     return cls.model_validate(result)
-                except AttributeError:
+                else:
                     return cls.parse_obj(result)
             elif hasattr(cls, 'from_dict') and callable(getattr(cls, 'from_dict')):
                 return cls.from_dict(result)
@@ -211,19 +231,21 @@ def deserialize_from_json(data: str, cls: Optional[Type]=None) -> Any:
                     raise SerializationError(f'Failed to instantiate {cls.__name__} from JSON: {te}', original_error=te)
         return result
     except Exception as e:
-        logger.exception(f'JSON deserialization error: {e}')
+        # Remove redundant logging
         raise SerializationError(message=f'Failed to deserialize from JSON: {str(e)}', original_error=e)
 
 def model_to_dict(model: BaseModel, exclude_none: bool=False) -> Dict[str, Any]:
-    try:
+    """Convert Pydantic model to dict with version compatibility"""
+    if _PYDANTIC_V2:
         return model.model_dump(exclude_none=exclude_none)
-    except AttributeError:
+    else:
         return model.dict(exclude_none=exclude_none)
 
 def model_to_json(model: BaseModel, pretty: bool=False, exclude_none: bool=False) -> str:
+    """Convert Pydantic model to JSON with version compatibility"""
     indent = 2 if pretty else None
-    try:
+    if _PYDANTIC_V2:
         return model.model_dump_json(indent=indent, exclude_none=exclude_none)
-    except AttributeError:
+    else:
         model_dict = model.dict(exclude_none=exclude_none)
         return json.dumps(model_dict, default=_default_encoder, ensure_ascii=False, indent=indent)

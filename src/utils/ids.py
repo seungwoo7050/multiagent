@@ -4,10 +4,27 @@ import random
 import string
 import time
 import uuid
+import threading
 from typing import Optional, Union, Dict
 from src.config.logger import get_logger
+
 logger = get_logger(__name__)
-_id_counter = 0
+
+# Thread-safe counter
+class _Counter:
+    def __init__(self):
+        self.value = 0
+        self.lock = threading.Lock()
+    
+    def increment(self, max_value=None):
+        with self.lock:
+            self.value += 1
+            if max_value and self.value >= max_value:
+                self.value = 0
+            return self.value
+
+# Initialize global variables
+_id_counter = _Counter()
 _node_id = ''.join(random.choices(string.hexdigits, k=6)).lower()
 _process_id = str(os.getpid() % 10000).zfill(4)
 
@@ -20,20 +37,18 @@ def generate_short_uuid() -> str:
     return base64.urlsafe_b64encode(uuid_bytes).decode('utf-8').rstrip('=')
 
 def generate_sequential_id(prefix: str='') -> str:
-    global _id_counter
-    _id_counter += 1
+    counter_value = _id_counter.increment()
     timestamp = int(time.time() * 1000)
     if prefix:
-        return f'{prefix}-{timestamp}-{_id_counter}'
+        return f'{prefix}-{timestamp}-{counter_value}'
     else:
-        return f'{timestamp}-{_id_counter}'
+        return f'{timestamp}-{counter_value}'
 
 def generate_snowflake_id() -> int:
-    global _id_counter
-    _id_counter = _id_counter + 1 & 4095
+    counter_value = _id_counter.increment(4095)  # Reset at 4095 (12 bits max)
     timestamp = int(time.time() * 1000)
     node_int = int(_node_id, 16) & 1023
-    snowflake = timestamp << 22 | node_int << 12 | _id_counter
+    snowflake = (timestamp << 22) | (node_int << 12) | counter_value
     return snowflake
 
 def generate_prefixed_id(prefix: str, length: int=16) -> str:
