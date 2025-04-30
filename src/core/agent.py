@@ -4,11 +4,11 @@ from enum import Enum
 from typing import Any, Dict, List, Optional, Set, Tuple, Type, Union, cast
 from pydantic import BaseModel, Field, field_validator
 from src.config.logger import get_logger
-from src.config.metrics import track_agent_created, track_agent_operation, track_agent_operation_completed, track_agent_error
+from src.config.metrics import get_metrics_manager
 from src.core.task import BaseTask, TaskResult
 from src.utils.timing import AsyncTimer, get_current_time_ms
 logger = get_logger(__name__)
-
+metrics_manager = get_metrics_manager()
 class AgentState(str, Enum):
     IDLE = 'idle'
     INITIALIZING = 'initializing'
@@ -47,8 +47,9 @@ class AgentContext(BaseModel):
     def get_memory(self, key: str, default: Any=None) -> Any:
         return self.memory.get(key, default)
 
-    class Config:
-        arbitrary_types_allowed = True
+    model_config = {
+        "arbitrary_types_allowed": True,
+    }
 
 class AgentConfig(BaseModel):
     name: str
@@ -64,7 +65,7 @@ class AgentConfig(BaseModel):
     memory_keys: List[str] = Field(default_factory=list)
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
-    @field_validator('agent_type')
+    @field_validator('agent_type', mode='before')
     @classmethod
     def validate_agent_type(cls, v: str) -> str:
         if not v:
@@ -102,7 +103,7 @@ class BaseAgent(abc.ABC):
         self.last_activity_time = get_current_time_ms()
         self.execution_count = 0
         self.error_count = 0
-        track_agent_created(self.config.agent_type)
+        metrics_manager.track_agent("created", agent_type=self.config.agent_type)
         logger.info(f'Agent initialized: {self.config.name} (type: {self.config.agent_type})', extra={'agent_type': self.config.agent_type, 'agent_name': self.config.name, 'agent_version': self.config.version})
 
     @property
@@ -152,7 +153,8 @@ class BaseAgent(abc.ABC):
         self.last_activity_time = get_current_time_ms()
         self.execution_count += 1
         operation_type = f'execute_{self.agent_type}'
-        track_agent_operation(self.agent_type, operation_type)
+        metrics_manager.track_agent("operations", agent_type=self.agent_type, operation_type=operation_type)
+        
         async with AsyncTimer(f'agent_{self.agent_type}_execution') as timer:
             try:
                 initialized = await self.initialize()
@@ -160,23 +162,51 @@ class BaseAgent(abc.ABC):
                     self.state = AgentState.ERROR
                     error_info = {'type': 'initialization_error', 'message': f'Failed to initialize agent {self.name}'}
                     logger.error(f'Agent initialization failed: {self.name}', extra={'agent_type': self.agent_type, 'error': error_info})
-                    track_agent_error(self.agent_type, 'initialization_error')
+                    metrics_manager.track_agent("errors", agent_type=self.agent_type, error_type="initialization_error")
                     return AgentResult.error_result(error_info, timer.execution_time)
-                result = await self.process(context)
+                
+                # Apply timeout if configured
+                if self.config.timeout > 0:
+                    try:
+                        result = await asyncio.wait_for(self.process(context), timeout=self.config.timeout)
+                    except asyncio.TimeoutError:
+                        self.state = AgentState.ERROR
+                        error_info = {
+                            'type': 'timeout_error', 
+                            'message': f'Agent execution timed out after {self.config.timeout}s'
+                        }
+                        logger.error(f'Agent execution timed out: {self.name}', 
+                                    extra={'agent_type': self.agent_type, 'timeout': self.config.timeout})
+                        metrics_manager.track_agent("errors", agent_type=self.agent_type, error_type="timeout_error")
+                        return AgentResult.error_result(error_info, timer.execution_time)
+                else:
+                    result = await self.process(context)
+                    
                 self.state = AgentState.IDLE
                 self.last_activity_time = get_current_time_ms()
-                track_agent_operation_completed(self.agent_type, operation_type, timer.execution_time)
+                metrics_manager.track_agent("duration", agent_type=self.agent_type, 
+                          operation_type=operation_type, value=timer.execution_time)
                 return result
             except Exception as e:
                 self.state = AgentState.ERROR
                 self.error_count += 1
-                logger.exception(f'Error during agent execution: {self.name}', extra={'agent_type': self.agent_type, 'error_type': type(e).__name__, 'error_message': str(e)})
-                track_agent_error(self.agent_type, type(e).__name__)
+                logger.exception(f'Error during agent execution: {self.name}', 
+                            extra={'agent_type': self.agent_type, 'error_type': type(e).__name__, 'error_message': str(e)})
+                metrics_manager.track_agent("errors", agent_type=self.agent_type, error_type=type(e).__name__)
                 try:
-                    return await self.handle_error(e, context)
+                    error_result = await self.handle_error(e, context)
+                    self.state = AgentState.IDLE  # Reset state to IDLE after handling error
+                    return error_result
                 except Exception as handler_error:
-                    logger.exception(f'Critical error in agent error handler: {self.name}', extra={'agent_type': self.agent_type, 'handler_error_type': type(handler_error).__name__, 'handler_error_message': str(handler_error), 'original_error_type': type(e).__name__, 'original_error_message': str(e)})
-                    error_info = {'type': 'unhandled_error', 'message': f'Agent execution failed: {str(e)}', 'handler_error': f'Error handler also failed: {str(handler_error)}'}
+                    logger.exception(f'Critical error in agent error handler: {self.name}', 
+                                extra={'agent_type': self.agent_type, 'handler_error_type': type(handler_error).__name__, 
+                                        'handler_error_message': str(handler_error), 'original_error_type': type(e).__name__, 
+                                        'original_error_message': str(e)})
+                    error_info = {
+                        'type': 'unhandled_error', 
+                        'message': f'Agent execution failed: {str(e)}', 
+                        'handler_error': f'Error handler also failed: {str(handler_error)}'
+                    }
                     return AgentResult.error_result(error_info, timer.execution_time)
 
     async def terminate(self) -> None:

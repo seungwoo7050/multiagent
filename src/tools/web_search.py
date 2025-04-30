@@ -2,7 +2,7 @@ import asyncio
 import hashlib
 import json
 from typing import Any, Dict, List, Optional, Set, Union
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 from src.config.errors import ErrorCode, ToolError
 from src.config.logger import get_logger
 from src.config.metrics import CACHE_HITS_TOTAL, CACHE_MISSES_TOTAL
@@ -16,7 +16,7 @@ class WebSearchInput(BaseModel):
     query: str = Field(..., description='The search query to execute')
     num_results: int = Field(5, description='Number of search results to return', ge=1, le=10)
 
-    @validator('query')
+    @field_validator('query')
     def validate_query(cls, v: str) -> str:
         if not v or not isinstance(v, str):
             raise ValueError('Query must be a non-empty string')

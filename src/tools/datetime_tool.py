@@ -5,7 +5,7 @@ import calendar
 import zoneinfo
 from enum import Enum
 from typing import Any, Dict, List, Optional, Set, Union, Literal, Type
-from pydantic import BaseModel, Field, validator, field_validator
+from pydantic import BaseModel, Field, field_validator
 from src.config.errors import ErrorCode, ToolError
 from src.config.logger import get_logger
 from src.tools.base import BaseTool

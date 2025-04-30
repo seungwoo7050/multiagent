@@ -23,13 +23,28 @@ def check_version_compatibility(context_version_str: str) -> bool:
 def upgrade_context(context_data: Dict[str, Any], target_version_str: str) -> Dict[str, Any]:
     current_version_str = context_data.get('version', '0.0.0')
     current_version = version.parse(current_version_str)
-    target = version.parse(target_version_str)
-    if current_version == target:
-        logger.debug(f'Context is already at the target version {target_version_str}. No upgrade needed.')
+    target_version = version.parse(target_version_str)
+    
+    if current_version == target_version:
+        logger.debug(f'Context is already at target version {target_version_str}. No upgrade needed.')
         return context_data
-    if current_version > target:
-        logger.warning(f'Attempting to downgrade context from {current_version} to {target}. This is not typically supported.')
+    
+    if current_version > target_version:
+        logger.warning(f'Attempting to downgrade context from {current_version} to {target_version}. Not supported.')
         return context_data
+    
+    # Copy the context data to avoid modifying the original
+    upgraded_data = dict(context_data)
+    
+    # Implementation for version upgrade paths
+    if current_version_str == '0.0.0' and target_version_str in SUPPORTED_VERSIONS:
+        # Upgrade from unversioned context to supported version
+        upgraded_data['version'] = target_version_str
+        logger.info(f'Upgraded unversioned context to {target_version_str}')
+        return upgraded_data
+    
+    # Add other upgrade paths based on specific version transitions
+    
     logger.error(f'Unsupported context upgrade path from {current_version_str} to {target_version_str}')
     raise ValueError(f'Cannot upgrade context from version {current_version_str} to {target_version_str}')
 

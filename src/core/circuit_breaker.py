@@ -2,9 +2,9 @@ import asyncio
 import enum
 import time
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Type, TypeVar, Union, cast
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from src.config.logger import get_logger
-from src.config.metrics import track_agent_error
+from src.config.metrics import get_metrics_manager
 from src.utils.timing import get_current_time_ms
 logger = get_logger(__name__)
 T = TypeVar('T')
@@ -24,9 +24,18 @@ class CircuitBreakerConfig(BaseModel):
     count_timeouts_as_failures: bool = True
     request_timeout_ms: Optional[int] = None
     excluded_exceptions: List[str] = Field(default_factory=list)
-
-    class Config:
-        arbitrary_types_allowed = True
+    
+    @field_validator('failure_threshold', 'success_threshold', 'max_concurrent_requests')
+    def validate_thresholds(cls, v, values):
+        if v <= 0:
+            raise ValueError(f"Threshold values must be positive")
+        return v
+    
+    @field_validator('reset_timeout_ms', 'failure_window_ms')
+    def validate_timeouts(cls, v, values):
+        if v <= 0:
+            raise ValueError(f"Timeout values must be positive")
+        return v
 
 class CircuitBreakerMetrics(BaseModel):
     total_requests: int = 0
@@ -41,8 +50,9 @@ class CircuitBreakerMetrics(BaseModel):
     current_concurrent_requests: int = 0
     max_observed_concurrency: int = 0
 
-    class Config:
-        arbitrary_types_allowed = True
+    model_config = {
+        "arbitrary_types_allowed": True,
+    }
 
 class CircuitBreaker:
 
@@ -71,16 +81,34 @@ class CircuitBreaker:
         return self._state == CircuitState.HALF_OPEN
 
     @property
-    def failure_count(self) -> int:
-        current_time = get_current_time_ms()
-        window_start = current_time - self.config.failure_window_ms
-        recent_failures_in_window = [f for f in self.metrics.recent_failures if f[0] >= window_start]
-        self.metrics.recent_failures = recent_failures_in_window
-        return len(recent_failures_in_window)
-
+    async def failure_count(self) -> int:
+        async with self._state_lock:
+            current_time = get_current_time_ms()
+            window_start = current_time - self.config.failure_window_ms
+            # Filter failures and keep only those in the window
+            recent_failures_in_window = [f for f in self.metrics.recent_failures if f[0] >= window_start]
+            
+            # Replace the list with the filtered version to prevent unbounded growth
+            self.metrics.recent_failures = recent_failures_in_window
+            return len(recent_failures_in_window)
+    
+    async def _prune_failures(self) -> None:
+        """Periodically prune the failures list to prevent memory growth"""
+        async with self._state_lock:
+            current_time = get_current_time_ms()
+            window_start = current_time - self.config.failure_window_ms
+            self.metrics.recent_failures = [f for f in self.metrics.recent_failures if f[0] >= window_start]
+            
+    # This method should be called periodically or after adding a certain number of failures
+    
     async def allow_request(self) -> bool:
+        # Occasionally prune the failures list to prevent memory issues
+        if len(self.metrics.recent_failures) > self.config.failure_threshold * 2:
+            await self._prune_failures()
+            
         if self._state == CircuitState.CLOSED:
             return self.metrics.current_concurrent_requests < self.config.max_concurrent_requests
+        # ... rest of method remains the same ...
         if self._state == CircuitState.OPEN:
             time_in_open_state = get_current_time_ms() - self.metrics.last_state_change_time
             if time_in_open_state >= self.config.reset_timeout_ms:

@@ -20,7 +20,7 @@ class OrchestrationWorkerPoolConfig(BaseModel):
     shutdown_timeout: float = Field(10.0, description='Timeout in seconds when shutting down the pool.')
     max_concurrent_tasks: int = Field(default_factory=lambda: max(os.cpu_count() or 1, 1) * 2, description='Maximum number of tasks allowed to run concurrently across all workers.')
 
-    @validator('workers', 'max_concurrent_tasks')
+    @field_validator('workers', 'max_concurrent_tasks')
     def validate_positive_int(cls, v: int, field: Field) -> int:
         if v <= 0:
             cpu_cores = max(os.cpu_count() or 1, 1)

@@ -20,7 +20,7 @@ class RateLimitConfig(BaseModel):
     burst: int = Field(120, description='Burst capacity (determines delay tolerance)')
     period: float = Field(1.0, description='Period in seconds (usually 1.0 for per-second rate)')
 
-    @validator('rate', 'burst', 'period')
+    @field_validator('rate', 'burst', 'period')
     def check_positive(cls, v: float) -> float:
         if v <= 0:
             raise ValueError('Rate limit parameters must be positive')
@@ -33,7 +33,7 @@ class BackpressureConfig(BaseModel):
     strategy: BackpressureStrategy = Field(default=BackpressureStrategy.REJECT, description='Strategy to apply (only REJECT supported by RedisRateLimiter)')
     rate_limit: RateLimitConfig = Field(default_factory=RateLimitConfig)
 
-    @validator('strategy')
+    @field_validator('strategy')
     def check_strategy(cls, v: BackpressureStrategy) -> BackpressureStrategy:
         if v != BackpressureStrategy.REJECT:
             logger.warning(f'RedisRateLimiter currently only supports REJECT strategy. Forcing to REJECT.')
@@ -45,8 +45,9 @@ class BackpressureMetrics(BaseModel):
     rejected_requests: int = 0
     last_rejection_time: Optional[float] = None
 
-    class Config:
-        arbitrary_types_allowed = True
+    model_config = {
+        "arbitrary_types_allowed": True,
+    }
 
 class RedisRateLimiter:
     GCRA_LUA_SCRIPT: str = "\n        local key = KEYS[1]\n        local now_ms = tonumber(ARGV[1])\n        local emission_interval_ms = tonumber(ARGV[2])\n        local delay_tolerance_ms = tonumber(ARGV[3])\n        local cost = tonumber(ARGV[4])\n\n        -- Theoretical Arrival Time (TAT) 가져오기\n        local tat_str = redis.call('get', key)\n        local tat = 0\n        if tat_str then\n            tat = tonumber(tat_str)\n        end\n\n        -- TAT는 과거 시간일 수 없음 (현재 시간 기준으로 재설정)\n        tat = math.max(tat, now_ms)\n\n        -- 이번 요청 처리 후의 새로운 TAT 계산\n        local new_tat = tat + (cost * emission_interval_ms)\n\n        -- 요청이 허용될 수 있는 가장 이른 시간 계산\n        local allow_at = new_tat - delay_tolerance_ms\n\n        -- 허용 여부 판단 (allow_at <= now_ms)\n        if allow_at <= now_ms then\n            -- 허용: 새로운 TAT 저장 및 TTL 설정 (메모리 관리)\n            local ttl_ms = math.max(1, math.ceil(new_tat - now_ms + delay_tolerance_ms))\n            redis.call('set', key, new_tat, 'PX', ttl_ms) -- 밀리초 단위 TTL\n            return 1 -- 허용\n        else\n            -- 거부: TAT 변경 없음\n            return 0 -- 거부\n        end\n    "

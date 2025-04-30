@@ -1,9 +1,12 @@
 import zlib
 import json
+import time
 from typing import Dict, Any
 from src.core.mcp.protocol import ContextProtocol
 from src.core.mcp.schema import BaseContextSchema
 from src.config.logger import get_logger
+from src.config.metrics import get_metrics_manager
+
 logger = get_logger(__name__)
 
 def optimize_context_data(context: ContextProtocol) -> ContextProtocol:
@@ -24,12 +27,60 @@ def optimize_context_data(context: ContextProtocol) -> ContextProtocol:
 
 def compress_context(context_data: Dict[str, Any]) -> bytes:
     try:
+        if context_data is None:
+            raise TypeError("Cannot compress None data")
+        
+        start_time = time.time()
         json_data = json.dumps(context_data, sort_keys=True, default=str).encode('utf-8')
         original_size = len(json_data)
-        compressed = zlib.compress(json_data)
+        
+        # Choose compression level based on data size
+        if original_size < 1024:  # Small context
+            compression_level = 1  # Fastest, less compression
+        elif original_size < 1024 * 10:  # Medium context
+            compression_level = 6  # Default
+        else:  # Large context
+            compression_level = 9  # Maximum compression
+            
+        compressed = zlib.compress(json_data, level=compression_level)
         compressed_size = len(compressed)
-        logger.debug(f'Compressed context data from {original_size} to {compressed_size} bytes (zlib level {zlib.Z_DEFAULT_COMPRESSION})')
-        return compressed
+        
+        # Record compression metrics
+        get_metrics_manager().track_memory(
+            'operations',
+            operation_type='compress_context'
+        )
+        
+        # Record compression time
+        compression_time = time.time() - start_time
+        get_metrics_manager().track_memory(
+            'duration', 
+            operation_type='compress_context', 
+            value=compression_time
+        )
+        
+        # Record compression ratio if enabled
+        if hasattr(get_metrics_manager(), 'track_mcp'):
+            compression_ratio = compressed_size / original_size
+            get_metrics_manager().track_mcp(
+                'compression_ratio',
+                value=compression_ratio
+            )
+        
+        logger.debug(f'Compressed context from {original_size} to {compressed_size} bytes (ratio: {compressed_size/original_size:.2f})')
+        
+        # Only use compression if it actually reduces size
+        if compressed_size < original_size:
+            return compressed
+        else:
+            logger.debug(f'Compression ineffective, using original data')
+            return json_data
+        
+    except TypeError as e:
+        # Log but re-raise TypeError for tests to catch
+        logger.error(f'Failed to compress context data: {e}')
+        raise  # Re-raise TypeError
+            
     except Exception as e:
         logger.error(f'Failed to compress context data: {e}', exc_info=True)
         logger.warning('Compression failed. Returning original JSON bytes as fallback.')

@@ -111,6 +111,45 @@ CACHE_METRICS = {
     'size': Gauge('cache_size_entries', 'Current number of entries in cache', ['cache_type'])
 }
 
+REGISTRY_METRICS = {
+    'operations': Counter('registry_operations_total', 'Total number of registry operations', 
+                        ['registry_name', 'operation_type']),
+    'duration': Histogram('registry_operation_duration_seconds', 'Registry operation duration in seconds', 
+                         ['operation'], 
+                         buckets=(0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0, float('inf'))),
+    'size': Gauge('registry_size_entries', 'Current number of entries in registry', ['registry_name'])
+}
+
+# Task metric constants for direct access
+TASK_CREATED_TOTAL = TASK_METRICS['created']
+TASK_CONSUMED_TOTAL = TASK_METRICS['consumed']
+TASK_COMPLETED_TOTAL = TASK_METRICS['completed']
+TASK_DURATION = TASK_METRICS['duration']
+TASK_QUEUE_DEPTH = TASK_METRICS['queue_depth']
+TASK_PROCESSING = TASK_METRICS['processing']
+TASK_REJECTIONS_TOTAL = TASK_METRICS['rejections']
+
+# LLM metric constants for direct access
+LLM_REQUESTS_TOTAL = LLM_METRICS['requests']
+LLM_REQUEST_DURATION = LLM_METRICS['duration'] 
+LLM_TOKEN_USAGE = LLM_METRICS['tokens']
+LLM_ERRORS_TOTAL = LLM_METRICS['errors']
+
+# Agent metric constants for direct access
+AGENT_CREATED_TOTAL = AGENT_METRICS['created']
+AGENT_OPERATIONS_TOTAL = AGENT_METRICS['operations']
+AGENT_OPERATION_DURATION = AGENT_METRICS['duration']
+AGENT_ERROR_TOTAL = AGENT_METRICS['errors']
+
+# Memory metric constants for direct access
+MEMORY_OPERATIONS_TOTAL = MEMORY_METRICS['operations']
+MEMORY_OPERATION_DURATION = MEMORY_METRICS['duration']
+MEMORY_SIZE = MEMORY_METRICS['size']
+
+# Registry metric constants for direct access (add this after creating REGISTRY_METRICS as we discussed)
+REGISTRY_OPERATIONS_TOTAL = REGISTRY_METRICS['operations']
+REGISTRY_OPERATION_DURATION = REGISTRY_METRICS['duration']
+REGISTRY_SIZE = REGISTRY_METRICS['size']
 
 class MetricsManager:
     """
@@ -150,50 +189,72 @@ class MetricsManager:
         HTTP_RESPONSE_SIZE.labels(
             method=method, endpoint=endpoint).observe(response_size)
     
+    # 수정된 track_task 메서드 로직 (전체 메서드를 아래 내용으로 교체)
     def track_task(self, metric_name: str, **labels) -> None:
         """
         Track a task metric.
-        
+
         Args:
             metric_name: Name of the metric to track
-            **labels: Labels for the metric
+            **labels: Labels for the metric. For Counters, 'value' key will be used for inc amount.
         """
         if not self.enabled:
             return
-            
+
         if metric_name not in TASK_METRICS:
             logger.warning(f"Unknown task metric: {metric_name}")
             return
-            
+
         metric = TASK_METRICS[metric_name]
-        
-        if isinstance(metric, Gauge):
-            if metric_name == 'processing':
-                if 'increment' in labels and labels.pop('increment'):
-                    metric.inc()
+        value_for_inc = None
+
+        # Counter 타입의 경우, 'value' 레이블을 inc() 인자로 사용하기 위해 분리
+        if isinstance(metric, Counter) and 'value' in labels:
+             # labels 딕셔너리에서 'value'를 제거하고 그 값을 저장
+             # .pop()은 해당 키가 없으면 에러를 발생시키므로 안전하게 .get()과 del 사용 가능
+             # 또는 기본값 1을 사용하려면 value_for_inc = labels.pop('value', 1) 사용
+             value_for_inc = labels.pop('value')
+
+        try:
+            if isinstance(metric, Gauge):
+                if metric_name == 'processing':
+                    # 'processing' 게이지는 특별 처리 (증가/감소)
+                    if 'increment' in labels and labels.pop('increment'):
+                        metric.inc()
+                    else:
+                        metric.dec()
                 else:
-                    metric.dec()
-            else:
+                    # 다른 게이지는 값 설정
+                    value = labels.pop('value', 0)
+                    if labels:
+                        metric.labels(**labels).set(value)
+                    else:
+                        metric.set(value)
+            elif isinstance(metric, Histogram):
+                # 히스토그램은 값 관찰
                 value = labels.pop('value', 0)
                 if labels:
-                    metric.labels(**labels).set(value)
+                    metric.labels(**labels).observe(value)
                 else:
-                    metric.set(value)
-        elif isinstance(metric, Histogram):
-            value = labels.pop('value', 0)
-            if labels:
-                metric.labels(**labels).observe(value)
+                    metric.observe(value)
+            elif isinstance(metric, Counter):
+                # 카운터는 값 증가 (분리된 value 사용)
+                labeled_metric = metric.labels(**labels) if labels else metric
+                if value_for_inc is not None:
+                    # value_for_inc는 float일 수 있으므로 int가 필요하면 변환
+                    labeled_metric.inc(float(value_for_inc))
+                else:
+                    # value가 제공되지 않으면 1 증가
+                    labeled_metric.inc()
             else:
-                metric.observe(value)
-        else:
-            try:
-                # Counter는 먼저 labels()를 호출한 후 inc()를 호출해야 함
-                if labels:
-                    metric.labels(**labels).inc()
-                else:
-                    metric.inc()
-            except TypeError as e:
-                logger.warning(f"Error incrementing metric {metric_name}: {e}")
+                logger.warning(f"Unhandled metric type for {metric_name}: {type(metric)}")
+
+        except (ValueError, TypeError) as e:
+            # Prometheus 클라이언트 라이브러리에서 발생하는 레이블 관련 오류 포함
+            logger.warning(f"Error processing metric {metric_name} with labels {labels}: {e}")
+        except Exception as e:
+            # 기타 예외 처리
+            logger.exception(f"Unexpected error processing metric {metric_name}: {e}")
     
     def track_llm(self, metric_name: str, **labels) -> None:
         """
@@ -460,6 +521,41 @@ class MetricsManager:
             except Exception as e:
                 logger.error(f"Failed to start metrics server: {e}", exc_info=True)
                 return None
+            
+    def track_registry(self, metric_name: str, **labels) -> None:
+        """
+        Track a registry metric.
+        
+        Args:
+            metric_name: Name of the metric to track
+            **labels: Labels for the metric
+        """
+        if not self.enabled:
+            return
+            
+        if metric_name not in REGISTRY_METRICS:
+            logger.warning(f"Unknown registry metric: {metric_name}")
+            return
+            
+        metric = REGISTRY_METRICS[metric_name]
+        
+        if isinstance(metric, Gauge):
+            value = labels.pop('value', 0)
+            if labels:
+                metric.labels(**labels).set(value)
+            else:
+                metric.set(value)
+        elif isinstance(metric, Histogram):
+            value = labels.pop('value', 0)
+            if labels:
+                metric.labels(**labels).observe(value)
+            else:
+                metric.observe(value)
+        else:
+            if labels:
+                metric.labels(**labels).inc()
+            else:
+                metric.inc()
 
 
 # Singleton instance
@@ -524,3 +620,11 @@ def timed_metric(metric: Union[Histogram, Summary],
 def start_metrics_server() -> Optional[threading.Thread]:
     """Start the Prometheus metrics server."""
     return get_metrics_manager().start_metrics_server()
+
+def track_registry_operation(registry_name: str, operation_type: str) -> None:
+    """Track a registry operation."""
+    get_metrics_manager().track_registry('operations', registry_name=registry_name, operation_type=operation_type)
+
+def track_registry_size(registry_name: str, size: int) -> None:
+    """Track the size of a registry."""
+    get_metrics_manager().track_registry('size', registry_name=registry_name, value=size)

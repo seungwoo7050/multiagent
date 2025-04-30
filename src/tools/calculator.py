@@ -2,7 +2,7 @@ import ast
 import math
 import operator
 from typing import Any, Dict, List, Optional, Set, Union
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 from src.config.errors import ErrorCode, ToolError
 from src.config.logger import get_logger
 from src.tools.base import BaseTool
@@ -12,7 +12,7 @@ logger = get_logger(__name__)
 class CalculatorInput(BaseModel):
     expression: str = Field(..., description='The mathematical expression to evaluate')
 
-    @validator('expression')
+    @field_validator('expression')
     def validate_expression(cls, v: str) -> str:
         if not v or not isinstance(v, str):
             raise ValueError('Expression must be a non-empty string')

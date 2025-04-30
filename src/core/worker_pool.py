@@ -9,14 +9,16 @@ import sys
 from collections import deque
 from enum import Enum
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple, TypeVar, Union, cast, Coroutine
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 from src.config.logger import get_logger
-from src.config.metrics import track_task_completed, TASK_QUEUE_DEPTH, TASK_PROCESSING
+from src.config.metrics import get_metrics_manager, TASK_QUEUE_DEPTH, TASK_PROCESSING
 from src.config.settings import get_settings
 from src.core.exceptions import WorkerPoolError
 from src.utils.timing import AsyncTimer, Timer, get_current_time_ms
 logger = get_logger(__name__)
 settings = get_settings()
+metrics_manager = get_metrics_manager()
+
 T = TypeVar('T')
 R = TypeVar('R')
 
@@ -35,7 +37,7 @@ class WorkerPoolConfig(BaseModel):
     worker_init_func: Optional[str] = None
     worker_timeout: float = 0.0
 
-    @validator('workers')
+    @field_validator('workers')
     def validate_workers(cls, v: int) -> int:
         if v <= 0:
             return max(os.cpu_count() or 1, 1)
@@ -52,8 +54,9 @@ class WorkerPoolMetrics(BaseModel):
     total_execution_time_ms: int = 0
     last_updated: int = Field(default_factory=get_current_time_ms)
 
-    class Config:
-        arbitrary_types_allowed = True
+    model_config = {
+        "arbitrary_types_allowed": True,
+    }
 
 class QueueWorkerPoolConfig(BaseModel):
     pool_type: str = 'queue_asyncio'
@@ -61,7 +64,7 @@ class QueueWorkerPoolConfig(BaseModel):
     max_queue_size: int = 0
     shutdown_timeout: float = 10.0
 
-    @validator('workers')
+    @field_validator('workers')
     def validate_workers(cls, v: int) -> int:
         if v <= 0:
             return max(os.cpu_count() or 1, 1)
@@ -78,8 +81,9 @@ class QueueWorkerPoolMetrics(BaseModel):
     total_execution_time_ms: int = 0
     last_updated: int = Field(default_factory=get_current_time_ms)
 
-    class Config:
-        arbitrary_types_allowed = True
+    model_config = {
+        "arbitrary_types_allowed": True,
+    }
 
 class ThreadWorkerPool:
 
@@ -114,7 +118,9 @@ class ThreadWorkerPool:
                     self.metrics.max_observed_queue_size = max(self.metrics.max_observed_queue_size, self.metrics.current_queue_size)
                 self.metrics.current_queue_size = max(0, self.metrics.current_queue_size)
             self.metrics.last_updated = get_current_time_ms()
-            TASK_QUEUE_DEPTH.set(self.metrics.current_queue_size)
+            metrics_manager.track_task('queue_depth', value=self.metrics.current_queue_size)
+
+
 
     def _task_done_callback(self, future: concurrent.futures.Future) -> None:
         success: bool = not future.cancelled() and future.exception() is None
@@ -129,9 +135,10 @@ class ThreadWorkerPool:
         if hasattr(future, '_start_time_ms'):
             execution_time_ms: int = get_current_time_ms() - getattr(future, '_start_time_ms', 0)
             status_str: str = 'success' if success else 'failure'
-            track_task_completed(status_str, execution_time_ms / 1000.0)
+            metrics_manager.track_task("completed", status=status_str, value=execution_time_ms / 1000.0)
+
         else:
-            track_task_completed('success' if success else 'failure', 0.0)
+            metrics_manager.track_task("completed", status='success' if success else 'failure', value=0.0)
 
     def submit(self, func: Callable[..., R], *args: Any, timeout: Optional[float]=None, **kwargs: Any) -> concurrent.futures.Future[R]:
         if self._is_shutdown:
@@ -141,21 +148,24 @@ class ThreadWorkerPool:
             acquired_semaphore = self._queue_semaphore.acquire(blocking=False)
             if not acquired_semaphore:
                 self._update_metrics(task_failed=True)
-                track_task_rejection(reason='queue_full')
+                metrics_manager.track_task("rejections", reason="queue_full")
+
                 raise WorkerPoolError(f"Thread worker pool '{self.name}' queue is full (size: {self.config.max_queue_size})")
         start_time_ms: int = get_current_time_ms()
 
         @functools.wraps(func)
         def tracked_func(*func_args: Any, **func_kwargs: Any) -> R:
             self._update_metrics(active_delta=1)
-            TASK_PROCESSING.inc()
+            metrics_manager.track_task('processing', increment=True)
+
             try:
                 return func(*func_args, **func_kwargs)
             finally:
                 execution_time: int = get_current_time_ms() - start_time_ms
                 with self._lock:
                     self.metrics.total_execution_time_ms += execution_time
-                TASK_PROCESSING.dec()
+                metrics_manager.track_task('processing', increment=False)
+
         try:
             self._update_metrics(task_submitted=True, queue_delta=1 if acquired_semaphore else 0)
             future: concurrent.futures.Future[R] = self._executor.submit(tracked_func, *args, **kwargs)
@@ -383,12 +393,14 @@ class ProcessWorkerPool:
                     self.metrics.max_observed_queue_size = max(self.metrics.max_observed_queue_size, self.metrics.current_queue_size)
                 self.metrics.current_queue_size = max(0, self.metrics.current_queue_size)
             self.metrics.last_updated = get_current_time_ms()
-            TASK_QUEUE_DEPTH.set(self.metrics.current_queue_size)
+            metrics_manager.track_task('queue_depth', value=self.metrics.current_queue_size)
+
 
     def _task_done_callback(self, future: concurrent.futures.Future) -> None:
         success: bool = not future.cancelled() and future.exception() is None
         self._update_metrics(task_completed=success, task_failed=not success, active_delta=-1)
-        TASK_PROCESSING.dec()
+        metrics_manager.track_task('processing', increment=False)
+
         with self._lock:
             self._futures.discard(future)
         if self._queue_semaphore:
@@ -399,11 +411,12 @@ class ProcessWorkerPool:
         if hasattr(future, '_start_time_ms'):
             execution_time_ms: int = get_current_time_ms() - getattr(future, '_start_time_ms', 0)
             status_str: str = 'success' if success else 'failure'
-            track_task_completed(status_str, execution_time_ms / 1000.0)
+            metrics_manager.track_task("completed", status=status_str, value=execution_time_ms / 1000.0)
+
             with self._lock:
                 self.metrics.total_execution_time_ms += execution_time_ms
         else:
-            track_task_completed('success' if success else 'failure', 0.0)
+            metrics_manager.track_task("completed", status='success' if success else 'failure', value=0.0)
 
     def submit(self, func: Callable[..., R], *args: Any, timeout: Optional[float]=None, **kwargs: Any) -> concurrent.futures.Future[R]:
         if self._is_shutdown:
@@ -413,7 +426,8 @@ class ProcessWorkerPool:
             acquired_semaphore = self._queue_semaphore.acquire(blocking=False)
             if not acquired_semaphore:
                 self._update_metrics(task_failed=True)
-                track_task_rejection(reason='queue_full')
+                metrics_manager.track_task("rejections", reason="queue_full")
+
                 raise WorkerPoolError(f"Process worker pool '{self.name}' queue is full (size: {self.config.max_queue_size})")
         if not _is_picklable(func):
             if acquired_semaphore and self._queue_semaphore:
@@ -423,7 +437,8 @@ class ProcessWorkerPool:
         start_time_ms: int = get_current_time_ms()
         try:
             self._update_metrics(task_submitted=True, queue_delta=1 if acquired_semaphore else 0, active_delta=1)
-            TASK_PROCESSING.inc()
+            metrics_manager.track_task('processing', increment=True)
+
             future: concurrent.futures.Future[R] = self._executor.submit(func, *args, **kwargs)
             setattr(future, '_start_time_ms', start_time_ms)
             future.add_done_callback(self._task_done_callback)
@@ -433,7 +448,8 @@ class ProcessWorkerPool:
             return future
         except Exception as e:
             self._update_metrics(task_failed=True, queue_delta=-1 if acquired_semaphore else 0, active_delta=-1)
-            TASK_PROCESSING.dec()
+            metrics_manager.track_task('processing', increment=False)
+
             if acquired_semaphore and self._queue_semaphore:
                 self._queue_semaphore.release()
             logger.exception(f'Error submitting task to process pool {self.name}: {e}', exc_info=True)
@@ -494,7 +510,7 @@ class ProcessWorkerPool:
         results: List[Union[R, Exception]] = []
         start_time: float = time.time()
         self._update_metrics(active_delta=len(items))
-        TASK_PROCESSING.add(len(items))
+        metrics_manager.track_task('processing', increment=True, value=len(items))
         try:
             iterator = self._executor.map(func, items, timeout=timeout, chunksize=chunksize)
             results = list(iterator)
@@ -507,7 +523,7 @@ class ProcessWorkerPool:
             raise WorkerPoolError(f'Error in map operation: {str(e)}', original_error=e)
         finally:
             self._update_metrics(active_delta=-len(items))
-            TASK_PROCESSING.sub(len(items))
+            metrics_manager.track_task('processing', increment=False, value=len(items))
             completed_count = sum((1 for r in results if not isinstance(r, Exception)))
             failed_count = len(results) - completed_count
 
@@ -556,21 +572,180 @@ class ProcessWorkerPool:
     async def __aexit__(self, exc_type: Optional[type[BaseException]], exc_val: Optional[BaseException], exc_tb: Optional[Any]) -> None:
         await self.ashutdown()
 
-class QueueWorkerPool:
+# Create a base class for shared functionality
+class BaseWorkerPool:
+    """Base class for all worker pools to reduce code duplication"""
+    
+    def __init__(self, name: str):
+        self.name = name
+        self._is_shutdown = False
+        
+    def _update_metrics(self, metrics_obj, task_submitted=False, task_completed=False, 
+                       task_failed=False, active_delta=0, queue_delta=0):
+        """Centralized metrics update logic for all pool types"""
+        # Update submitted count
+        if task_submitted:
+            metrics_obj.tasks_submitted += 1
+            
+        # Update completion counts
+        if task_completed:
+            metrics_obj.tasks_completed += 1
+        if task_failed:
+            metrics_obj.tasks_failed += 1
+            
+        # Update active workers
+        if active_delta != 0:
+            metrics_obj.active_workers += active_delta
+            metrics_obj.max_active_workers = max(
+                metrics_obj.max_active_workers, 
+                metrics_obj.active_workers
+            )
+            
+        # Update queue metrics
+        if queue_delta != 0:
+            metrics_obj.current_queue_size += queue_delta
+            if queue_delta > 0:
+                metrics_obj.max_observed_queue_size = max(
+                    metrics_obj.max_observed_queue_size, 
+                    metrics_obj.current_queue_size
+                )
+            metrics_obj.current_queue_size = max(0, metrics_obj.current_queue_size)
+            
+        # Update timestamp and prometheus metrics
+        metrics_obj.last_updated = get_current_time_ms()
+        metrics_manager.track_task('queue_depth', value=metrics_obj.current_queue_size)
+    
+    async def _common_shutdown(self, pool_type, wait, timeout):
+        """Common shutdown logic across pool types"""
+        if self._is_shutdown:
+            logger.warning(f"{pool_type} worker pool '{self.name}' is already shut down")
+            return
+            
+        logger.info(f"Shutting down {pool_type} worker pool: {self.name} (wait={wait}, timeout={timeout}s)")
+        self._is_shutdown = True
+        
+    def _handle_task_exception(self, e, pool_type, task_info=None):
+        """Standardized exception handling for all pool types"""
+        if isinstance(e, asyncio.CancelledError):
+            logger.warning(f"Task in {pool_type} pool '{self.name}' was cancelled")
+            return {'type': 'task_cancelled', 'message': 'Task was cancelled'}
+        elif isinstance(e, TimeoutError):
+            logger.warning(f"Task in {pool_type} pool '{self.name}' timed out")
+            return {'type': 'task_timeout', 'message': f'Task execution timed out: {str(e)}'}
+        else:
+            task_name = task_info or getattr(e, '__name__', 'unknown')
+            logger.error(f"Error executing task '{task_name}' in {pool_type} pool '{self.name}': {e}", 
+                       exc_info=True)
+            return {'type': 'task_error', 'message': f'Task execution failed: {str(e)}'}
+            
+# Example integration with QueueWorkerPool
 
+class QueueWorkerPool(BaseWorkerPool):
     def __init__(self, name: str, config: Optional[QueueWorkerPoolConfig]=None):
-        self.name: str = name
+        super().__init__(name)  # Initialize base class
         self._config: QueueWorkerPoolConfig = config or QueueWorkerPoolConfig()
         self._config.pool_type = 'queue_asyncio'
         self._metrics: QueueWorkerPoolMetrics = QueueWorkerPoolMetrics()
         self._work_queue: asyncio.Queue[Optional[Tuple[Callable[..., Coroutine[Any, Any, Any]], tuple, dict]]] = asyncio.Queue(maxsize=self._config.max_queue_size)
         self._workers: Set[asyncio.Task[None]] = set()
-        self._is_shutdown: bool = False
         self._worker_states: Dict[str, str] = {}
         self._active_task_count: int = 0
         self._metrics_lock: asyncio.Lock = asyncio.Lock()
-        logger.info(f'Initialized QueueWorkerPool: {name}', extra={'pool_name': name, 'workers': self.config.workers, 'max_queue_size': self.config.max_queue_size or 'unlimited'})
+        logger.info(f'Initialized QueueWorkerPool: {name}', 
+                  extra={'pool_name': name, 'workers': self.config.workers, 
+                        'max_queue_size': self.config.max_queue_size or 'unlimited'})
         self._start_workers()
+        
+    async def _worker_loop(self, worker_id: int) -> None:
+        worker_name: str = f'{self.name}-worker-{worker_id}'
+        logger.debug(f'Asyncio worker {worker_name} started.')
+        self._worker_states[worker_name] = 'idle'
+        
+        while not self._is_shutdown:
+            task_info: Optional[Tuple[Callable[..., Coroutine[Any, Any, Any]], tuple, dict]] = None
+            try:
+                task_info = await self._work_queue.get()
+                if task_info is None:
+                    logger.debug(f'Worker {worker_name} received shutdown signal. Exiting loop.')
+                    self._worker_states[worker_name] = 'shutdown'
+                    break
+                
+                func, args, kwargs = task_info
+                task_start_time: int = get_current_time_ms()
+                success: bool = False
+                func_name: str = getattr(func, '__name__', 'unknown')
+                self._worker_states[worker_name] = 'busy'
+                
+                # Use base class metrics update
+                async with self._metrics_lock:
+                    self._active_task_count += 1
+                    self._update_metrics(
+                        self._metrics,
+                        active_delta=0  # We'll set active count directly
+                    )
+                    self._metrics.active_workers = self._active_task_count
+                    self._metrics.max_active_workers = max(
+                        self._metrics.max_active_workers, 
+                        self._metrics.active_workers
+                    )
+                
+                metrics_manager.track_task('processing', increment=True)
+                try:
+                    logger.debug(f'Worker {worker_name} starting task: {func_name}')
+                    if asyncio.iscoroutinefunction(func):
+                        await func(*args, **kwargs)
+                    else:
+                        loop: asyncio.AbstractEventLoop = asyncio.get_running_loop()
+                        await loop.run_in_executor(None, functools.partial(func, *args, **kwargs))
+                    success = True
+                    logger.debug(f'Worker {worker_name} completed task: {func_name}')
+                except Exception as e:
+                    # Use common exception handler
+                    error_info = self._handle_task_exception(e, "queue", func_name)
+                    success = False
+                finally:
+                    execution_time_ms: int = get_current_time_ms() - task_start_time
+                    async with self._metrics_lock:
+                        if success:
+                            self._metrics.tasks_completed += 1
+                        else:
+                            self._metrics.tasks_failed += 1
+                        self._metrics.total_execution_time_ms += execution_time_ms
+                        self._active_task_count -= 1
+                        self._metrics.active_workers = self._active_task_count
+                    
+                    metrics_manager.track_task('processing', increment=False)
+
+                    metric_status: str = 'success' if success else 'failure'
+                    metrics_manager.track_task("completed", status=metric_status, value=execution_time_ms / 1000.0)
+                    self._worker_states[worker_name] = 'idle'
+                    self._work_queue.task_done()
+                    
+            except asyncio.CancelledError:
+                logger.info(f'Worker {worker_name} loop cancelled.')
+                self._worker_states[worker_name] = 'shutdown'
+                break
+            except Exception as e:
+                logger.exception(f'Unexpected error in worker {worker_name} loop: {e}')
+                self._worker_states[worker_name] = 'error'
+                await asyncio.sleep(1)  # Brief pause before trying again
+                
+        logger.info(f'Asyncio worker {worker_name} finished.')
+
+    async def shutdown(self, wait: bool=True, timeout: Optional[float]=None) -> None:
+        # Use common shutdown logic
+        await self._common_shutdown("Queue", wait, timeout)
+        
+        # Queue-specific shutdown steps
+        for _ in range(len(self._workers)):
+            try:
+                self._work_queue.put_nowait(None)
+            except asyncio.QueueFull:
+                logger.warning(f"Queue full while sending shutdown signals to workers in pool '{self.name}'")
+                break
+            except Exception as e:
+                logger.error(f"Error putting shutdown signal into queue for pool '{self.name}': {e}")
+                
 
     @property
     def config(self) -> QueueWorkerPoolConfig:
@@ -590,71 +765,6 @@ class QueueWorkerPool:
             self._worker_states[worker_task.get_name()] = 'idle'
         logger.info(f"Started {len(self._workers)} asyncio workers for pool '{self.name}'")
 
-    async def _worker_loop(self, worker_id: int) -> None:
-        worker_name: str = f'{self.name}-worker-{worker_id}'
-        logger.debug(f'Asyncio worker {worker_name} started.')
-        self._worker_states[worker_name] = 'idle'
-        while not self._is_shutdown:
-            task_info: Optional[Tuple[Callable[..., Coroutine[Any, Any, Any]], tuple, dict]] = None
-            try:
-                task_info = await self._work_queue.get()
-                if task_info is None:
-                    logger.debug(f'Worker {worker_name} received shutdown signal (None). Exiting loop.')
-                    self._worker_states[worker_name] = 'shutdown'
-                    break
-                func: Callable[..., Coroutine[Any, Any, Any]]
-                args: tuple
-                kwargs: dict
-                func, args, kwargs = task_info
-                task_start_time: int = get_current_time_ms()
-                success: bool = False
-                func_name: str = getattr(func, '__name__', 'unknown')
-                self._worker_states[worker_name] = 'busy'
-                async with self._metrics_lock:
-                    self._active_task_count += 1
-                    self.metrics.active_workers = self._active_task_count
-                    self.metrics.max_active_workers = max(self.metrics.max_active_workers, self.metrics.active_workers)
-                TASK_PROCESSING.inc()
-                try:
-                    logger.debug(f'Worker {worker_name} starting task: {func_name}')
-                    if asyncio.iscoroutinefunction(func):
-                        await func(*args, **kwargs)
-                    else:
-                        loop: asyncio.AbstractEventLoop = asyncio.get_running_loop()
-                        await loop.run_in_executor(None, functools.partial(func, *args, **kwargs))
-                    success = True
-                    logger.debug(f'Worker {worker_name} completed task: {func_name}')
-                except asyncio.CancelledError:
-                    logger.warning(f'Worker {worker_name} task cancelled: {func_name}')
-                    success = False
-                except Exception as e:
-                    logger.error(f'Worker {worker_name} encountered error processing task {func_name}: {e}', exc_info=True)
-                    success = False
-                finally:
-                    execution_time_ms: int = get_current_time_ms() - task_start_time
-                    async with self._metrics_lock:
-                        if success:
-                            self.metrics.tasks_completed += 1
-                        else:
-                            self.metrics.tasks_failed += 1
-                        self.metrics.total_execution_time_ms += execution_time_ms
-                        self._active_task_count -= 1
-                        self.metrics.active_workers = self._active_task_count
-                    TASK_PROCESSING.dec()
-                    metric_status: str = 'success' if success else 'failure'
-                    track_task_completed(metric_status, execution_time_ms / 1000.0)
-                    self._worker_states[worker_name] = 'idle'
-                    self._work_queue.task_done()
-            except asyncio.CancelledError:
-                logger.info(f'Worker {worker_name} loop cancelled.')
-                self._worker_states[worker_name] = 'shutdown'
-                break
-            except Exception as e:
-                logger.exception(f'Unexpected error in worker {worker_name} loop: {e}')
-                self._worker_states[worker_name] = 'error'
-                await asyncio.sleep(1)
-        logger.info(f'Asyncio worker {worker_name} finished.')
-
     async def submit(self, func: Callable[..., Coroutine[Any, Any, Any]], *args: Any, **kwargs: Any) -> None:
         if self._is_shutdown:
             raise WorkerPoolError(f'Worker pool {self.name} is shutdown')
@@ -663,68 +773,23 @@ class QueueWorkerPool:
             current_qsize: int = self._work_queue.qsize()
             estimated_qsize_after_put = current_qsize + 1
             self.metrics.max_observed_queue_size = max(self.metrics.max_observed_queue_size, estimated_qsize_after_put)
-            TASK_QUEUE_DEPTH.set(estimated_qsize_after_put)
+            metrics_manager.track_task('queue_depth', value=estimated_qsize_after_put)
         try:
             await self._work_queue.put((func, args, kwargs))
             logger.debug(f"Task '{getattr(func, '__name__', 'unknown')}' submitted to pool '{self.name}'. Current approx queue size: {estimated_qsize_after_put}")
         except asyncio.QueueFull:
             async with self._metrics_lock:
                 self.metrics.tasks_failed += 1
-                TASK_QUEUE_DEPTH.set(self._work_queue.qsize())
-            track_task_rejection(reason='queue_full')
+                metrics_manager.track_task('queue_depth', value=self._work_queue.qsize())
+            metrics_manager.track_task("rejections", reason="queue_full")
+
             raise WorkerPoolError(f"Worker pool '{self.name}' queue is full (max size: {self.config.max_queue_size})")
         except Exception as e:
             async with self._metrics_lock:
                 self.metrics.tasks_failed += 1
-                TASK_QUEUE_DEPTH.set(self._work_queue.qsize())
+                metrics_manager.track_task('queue_depth', value=self._work_queue.qsize())
             raise WorkerPoolError(f"Failed to submit task to pool '{self.name}': {e}")
 
-    async def shutdown(self, wait: bool=True, timeout: Optional[float]=None) -> None:
-        if self._is_shutdown:
-            logger.warning(f"Worker pool '{self.name}' is already shut down or shutting down.")
-            return
-        logger.info(f"Shutting down worker pool '{self.name}' (wait={wait}, timeout={timeout}s)...")
-        self._is_shutdown = True
-        for _ in range(len(self._workers)):
-            try:
-                self._work_queue.put_nowait(None)
-            except asyncio.QueueFull:
-                logger.warning(f"Queue full while sending shutdown signals to workers in pool '{self.name}'. Some workers might not receive the signal directly.")
-                break
-            except Exception as e:
-                logger.error(f"Error putting shutdown signal (None) into queue for pool '{self.name}': {e}")
-        shutdown_deadline: float = time.monotonic() + (timeout if timeout is not None else self.config.shutdown_timeout)
-        if wait:
-            try:
-                logger.debug(f'Waiting for remaining tasks in queue ({self._work_queue.qsize()}) to be processed...')
-                q_timeout: float = max(0.1, shutdown_deadline - time.monotonic())
-                await asyncio.wait_for(self._work_queue.join(), timeout=q_timeout)
-                logger.debug(f"Work queue for pool '{self.name}' is now empty.")
-            except (asyncio.TimeoutError, asyncio.CancelledError):
-                logger.warning(f"Timeout or cancellation occurred while waiting for work queue to join during shutdown of pool '{self.name}'.")
-            except Exception as e:
-                logger.error(f"Error joining work queue during shutdown for pool '{self.name}': {e}", exc_info=True)
-            logger.debug(f'Waiting for {len(self._workers)} worker tasks to finish...')
-            worker_timeout: float = max(0.1, shutdown_deadline - time.monotonic())
-            if self._workers:
-                workers_to_wait: Set[asyncio.Task[None]] = self._workers
-                done: Set[asyncio.Task[None]]
-                pending: Set[asyncio.Task[None]]
-                done, pending = await asyncio.wait(workers_to_wait, timeout=worker_timeout)
-                logger.debug(f"Worker wait for pool '{self.name}' completed. Done: {len(done)}, Pending: {len(pending)}")
-                if pending:
-                    logger.warning(f"Cancelling {len(pending)} worker tasks that did not finish within timeout during shutdown of pool '{self.name}'.")
-                    for task in pending:
-                        task.cancel()
-                    await asyncio.sleep(0.1)
-            self._workers.clear()
-        else:
-            logger.debug(f"Cancelling {len(self._workers)} worker tasks immediately for pool '{self.name}'...")
-            for worker in self._workers:
-                worker.cancel()
-            await asyncio.sleep(0.1)
-            self._workers.clear()
-        logger.info(f"Worker pool '{self.name}' shutdown complete.")
 
     def get_active_workers(self) -> int:
         return self._active_task_count
@@ -761,7 +826,7 @@ async def get_worker_pool(name: str, pool_type: Union[WorkerPoolType, str]=Worke
                     elif isinstance(config, QueueWorkerPoolConfig):
                         typed_config = config
                     elif isinstance(config, WorkerPoolConfig):
-                        config_data = config.dict(exclude={'pool_type', 'worker_init_func'})
+                        config_data = config.model_dump(exclude={'pool_type', 'worker_init_func'})
                         typed_config = QueueWorkerPoolConfig(**config_data)
                     else:
                         try:
@@ -776,7 +841,7 @@ async def get_worker_pool(name: str, pool_type: Union[WorkerPoolType, str]=Worke
                     elif isinstance(config, WorkerPoolConfig):
                         typed_config = config
                     elif isinstance(config, QueueWorkerPoolConfig):
-                        config_data = config.dict(exclude={'pool_type'})
+                        config_data = config.model_dump(exclude={'pool_type'})
                         typed_config = WorkerPoolConfig(pool_type=pool_type_enum, **config_data)
                     else:
                         try:
@@ -791,7 +856,7 @@ async def get_worker_pool(name: str, pool_type: Union[WorkerPoolType, str]=Worke
                     elif isinstance(config, WorkerPoolConfig):
                         typed_config = config
                     elif isinstance(config, QueueWorkerPoolConfig):
-                        config_data = config.dict(exclude={'pool_type'})
+                        config_data = config.model_dump(exclude={'pool_type'})
                         typed_config = WorkerPoolConfig(pool_type=pool_type_enum, **config_data)
                     else:
                         try:

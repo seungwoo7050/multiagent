@@ -20,7 +20,8 @@ class BaseContextSchema(ContextProtocol):
     def optimize(self) -> 'BaseContextSchema':
         optimized = self.model_copy()
         if not optimized.metadata:
-            pass
+            # Empty metadata dict should be preserved but flagged as optimized
+            setattr(optimized, '_optimization_applied_inplace', True)
         return optimized
 
     def to_json(self, **kwargs: Any) -> str:

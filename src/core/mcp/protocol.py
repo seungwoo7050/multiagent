@@ -21,5 +21,6 @@ class ContextProtocol(abc.ABC, BaseModel):
     def get_metadata(self) -> Dict[str, Any]:
         return {'version': self.version, 'context_type': self.__class__.__name__}
 
-    class Config:
-        arbitrary_types_allowed = True
+    model_config = {
+        "arbitrary_types_allowed": True,
+    }

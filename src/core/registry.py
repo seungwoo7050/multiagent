@@ -1,9 +1,14 @@
 import functools
 import inspect
+import threading
 from typing import Any, Callable, Dict, Generic, List, Optional, Set, Type, TypeVar, Union, cast, get_type_hints
 from src.config.logger import get_logger
-from src.utils.timing import async_timed
+from src.config.metrics import get_metrics_manager, REGISTRY_OPERATION_DURATION
+
 logger = get_logger(__name__)
+metrics_manager = get_metrics_manager()
+
+
 T = TypeVar('T')
 F = TypeVar('F', bound=Callable[..., Any])
 
@@ -13,59 +18,73 @@ class Registry(Generic[T]):
         self._name = name
         self._registry: Dict[str, T] = {}
         self._metadata: Dict[str, Dict[str, Any]] = {}
+        self._lock = threading.RLock()  # Added thread lock for synchronization
         logger.info(f'Registry initialized: {name}')
 
     def register(self, name: str, item: T, **metadata) -> T:
-        if name in self._registry:
-            logger.warning(f'Overriding existing item in {self._name} registry: {name}')
-        self._registry[name] = item
-        self._metadata[name] = metadata
-        logger.debug(f'Registered item in {self._name} registry: {name}', extra={'registry': self._name, 'item_name': name, 'item_type': type(item).__name__, 'metadata': metadata})
+        with self._lock:
+            if name in self._registry:
+                logger.warning(f'Overriding existing item in {self._name} registry: {name}')
+            self._registry[name] = item
+            self._metadata[name] = metadata
+            logger.debug(f'Registered item in {self._name} registry: {name}', 
+                      extra={'registry': self._name, 'item_name': name, 'item_type': type(item).__name__, 'metadata': metadata})
         return item
 
     def unregister(self, name: str) -> Optional[T]:
-        if name not in self._registry:
-            logger.warning(f'Attempted to unregister non-existent item in {self._name} registry: {name}')
-            return None
-        item = self._registry.pop(name)
-        self._metadata.pop(name, None)
-        logger.debug(f'Unregistered item from {self._name} registry: {name}', extra={'registry': self._name, 'item_name': name})
+        with self._lock:
+            if name not in self._registry:
+                logger.warning(f'Attempted to unregister non-existent item in {self._name} registry: {name}')
+                return None
+            item = self._registry.pop(name)
+            self._metadata.pop(name, None)
+            logger.debug(f'Unregistered item from {self._name} registry: {name}', 
+                      extra={'registry': self._name, 'item_name': name})
         return item
 
-    @async_timed(name='registry_get_item')
+    @metrics_manager.timed_metric(REGISTRY_OPERATION_DURATION, {'operation': 'get_item'})
     async def get(self, name: str) -> Optional[T]:
         return self.get_sync(name)
 
     def get_sync(self, name: str) -> Optional[T]:
-        item = self._registry.get(name)
+        with self._lock:
+            item = self._registry.get(name)
         if item is None:
-            logger.debug(f'Item not found in {self._name} registry: {name}', extra={'registry': self._name, 'item_name': name})
+            logger.debug(f'Item not found in {self._name} registry: {name}', 
+                      extra={'registry': self._name, 'item_name': name})
         return item
 
     def get_metadata(self, name: str) -> Optional[Dict[str, Any]]:
-        metadata = self._metadata.get(name)
-        return metadata.copy() if metadata is not None else None
+        with self._lock:
+            metadata = self._metadata.get(name)
+            return metadata.copy() if metadata is not None else None
 
     def has(self, name: str) -> bool:
-        return name in self._registry
+        with self._lock:
+            return name in self._registry
 
     def list_names(self) -> List[str]:
-        return list(self._registry.keys())
+        with self._lock:
+            return list(self._registry.keys())
 
     def list_items(self) -> List[T]:
-        return list(self._registry.values())
+        with self._lock:
+            return list(self._registry.values())
 
     def list_all(self) -> Dict[str, T]:
-        return self._registry.copy()
+        with self._lock:
+            return self._registry.copy()
 
     def clear(self) -> None:
-        count = len(self._registry)
-        self._registry.clear()
-        self._metadata.clear()
-        logger.info(f'Cleared {self._name} registry ({count} items)')
+        with self._lock:
+            count = len(self._registry)
+            self._registry.clear()
+            self._metadata.clear()
+            logger.info(f'Cleared {self._name} registry ({count} items)')
 
     def size(self) -> int:
-        return len(self._registry)
+        with self._lock:
+            return len(self._registry)
 
     def decorator(self, name: Optional[str]=None, **metadata) -> Callable[[T], T]:
 
@@ -126,21 +145,48 @@ class ClassRegistry(Registry[Type[Any]]):
         except Exception as e:
             logger.error(f"Failed to instantiate class '{name}' from {self._name} registry: {e}", exc_info=True)
             return None
+
 _registries: Dict[str, Registry[Any]] = {}
+_registries_lock = threading.RLock()  # Global lock for registry dictionary
 
 def get_registry(name: str, registry_type: str='generic') -> Registry[Any]:
     registry_key = f'{name}:{registry_type}'
-    if registry_key not in _registries:
-        if registry_type == 'generic':
-            _registries[registry_key] = Registry[Any](name)
-        elif registry_type == 'function':
-            _registries[registry_key] = FunctionRegistry(name)
-        elif registry_type == 'class':
-            _registries[registry_key] = ClassRegistry(name)
-        else:
-            raise ValueError(f"Invalid registry type specified: {registry_type}. Must be 'generic', 'function', or 'class'.")
-        logger.info(f"Created new registry: Key='{registry_key}', Name='{name}', Type='{registry_type}'")
-    return _registries[registry_key]
+    
+    with _registries_lock:
+        if registry_key not in _registries:
+            if registry_type == 'generic':
+                _registries[registry_key] = Registry[Any](name)
+            elif registry_type == 'function':
+                _registries[registry_key] = FunctionRegistry(name)
+            elif registry_type == 'class':
+                _registries[registry_key] = ClassRegistry(name)
+            else:
+                raise ValueError(f"Invalid registry type specified: {registry_type}. Must be 'generic', 'function', or 'class'.")
+            logger.info(f"Created new registry: Key='{registry_key}', Name='{name}', Type='{registry_type}'")
+            
+        return _registries[registry_key]
+
+# Add registry cleanup to prevent memory leaks
+def cleanup_unused_registries(min_idle_time_ms: int = 3600000) -> int:
+    """Remove registries that haven't been accessed in the specified time period."""
+    current_time = get_current_time_ms()
+    removed_count = 0
+    
+    with _registries_lock:
+        keys_to_remove = []
+        for key, registry in _registries.items():
+            # This would require adding last_access_time tracking to Registry class
+            if hasattr(registry, 'last_access_time') and (current_time - registry.last_access_time) > min_idle_time_ms:
+                keys_to_remove.append(key)
+                
+        for key in keys_to_remove:
+            _registries.pop(key)
+            removed_count += 1
+            
+    if removed_count > 0:
+        logger.info(f"Cleaned up {removed_count} unused registries")
+    
+    return removed_count
 
 def clear_all_registries() -> None:
     count = len(_registries)

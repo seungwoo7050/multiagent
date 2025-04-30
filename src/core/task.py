@@ -1,12 +1,15 @@
+import asyncio
 import uuid
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Optional, Set, Union
-from pydantic import BaseModel, Field
+from typing import Any, Dict, List, Optional, Set, Union, cast
+from pydantic import BaseModel, Field, field_validator
 from src.config.logger import get_logger
-from src.config.metrics import track_task_created, track_task_completed
+from src.config.metrics import get_metrics_manager, TASK_COMPLETED_TOTAL
 from src.utils.timing import get_current_time_ms
+
 logger = get_logger(__name__)
+metrics_manager = get_metrics_manager()
 
 class TaskState(str, Enum):
     PENDING = 'pending'
@@ -20,6 +23,15 @@ class TaskPriority(int, Enum):
     NORMAL = 2
     HIGH = 3
     CRITICAL = 4
+    
+# Define valid state transitions
+VALID_TRANSITIONS = {
+    TaskState.PENDING: {TaskState.RUNNING, TaskState.CANCELED},
+    TaskState.RUNNING: {TaskState.COMPLETED, TaskState.FAILED, TaskState.CANCELED},
+    TaskState.COMPLETED: set(),  # Terminal state - no transitions allowed
+    TaskState.FAILED: set(),     # Terminal state - no transitions allowed
+    TaskState.CANCELED: set()    # Terminal state - no transitions allowed
+}
 
 class BaseTask(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
@@ -37,6 +49,95 @@ class BaseTask(BaseModel):
     metadata: Dict[str, Any] = Field(default_factory=dict)
     checkpoint_data: Dict[str, Any] = Field(default_factory=dict, exclude=True)
     event_history: List[Dict[str, Any]] = Field(default_factory=list, exclude=True)
+    timeout_ms: Optional[int] = None  # Added timeout field
+
+    def _validate_transition(self, new_state: TaskState) -> bool:
+        """Validate if the state transition is allowed"""
+        if new_state == self.state:
+            return True
+            
+        if new_state in VALID_TRANSITIONS.get(self.state, set()):
+            return True
+            
+        logger.warning(f"Invalid state transition for task {self.id}: {self.state} -> {new_state}")
+        return False
+
+    def start(self) -> 'BaseTask':
+        if not self._validate_transition(TaskState.RUNNING):
+            raise ValueError(f"Cannot transition task from {self.state} to {TaskState.RUNNING}")
+            
+        self.state = TaskState.RUNNING
+        self.started_at = get_current_time_ms()
+        self._add_event('task_started')
+        logger.debug(f'Task {self.id} started.')
+        return self
+
+    def complete(self, output: Dict[str, Any]) -> 'BaseTask':
+        if not self._validate_transition(TaskState.COMPLETED):
+            raise ValueError(f"Cannot transition task from {self.state} to {TaskState.COMPLETED}")
+            
+        self.state = TaskState.COMPLETED
+        self.completed_at = get_current_time_ms()
+        self.output = output
+        self._add_event('task_completed', {'output_keys': list(output.keys())})
+        duration = self.duration_ms
+        if duration is not None:
+            metrics_manager.track_task("completed", status="completed", value=duration / 1000.0)
+        logger.info(f'Task {self.id} completed successfully in {(duration if duration is not None else "N/A")} ms.')
+        return self
+
+    def fail(self, error: Dict[str, Any]) -> 'BaseTask':
+        if not self._validate_transition(TaskState.FAILED):
+            raise ValueError(f"Cannot transition task from {self.state} to {TaskState.FAILED}")
+            
+        self.state = TaskState.FAILED
+        self.completed_at = get_current_time_ms()
+        self.error = error
+        self._add_event('task_failed', {'error': error})
+        duration = self.duration_ms
+        if duration is not None:
+            metrics_manager.track_task("completed", status="failed", value=duration / 1000.0)
+        error_message = error.get('message', 'Unknown error')
+        logger.error(f'Task {self.id} failed in {(duration if duration is not None else "N/A")} ms. Error: {error_message}')
+        return self
+
+    def cancel(self, reason: Optional[str]=None) -> 'BaseTask':
+        if not self._validate_transition(TaskState.CANCELED):
+            logger.warning(f"Cannot cancel task {self.id} in state {self.state}")
+            return self
+            
+        self.state = TaskState.CANCELED
+        self.completed_at = get_current_time_ms()
+        if reason:
+            if self.error is None:
+                self.error = {}
+            self.error['cancel_reason'] = reason
+        event_data = {'reason': reason} if reason else {}
+        self._add_event('task_canceled', event_data)
+        duration = self.duration_ms
+        if duration is not None:
+            metrics_manager.track_task("completed", status="canceled", value=duration / 1000.0)
+        logger.warning(f'Task {self.id} canceled. Reason: {reason or "No reason provided"}')
+        return self
+
+    # Add timeout management
+    async def with_timeout(self, coro, timeout_override_ms: Optional[int] = None) -> Any:
+        """Run a coroutine with the task's timeout or an override"""
+        timeout_ms = timeout_override_ms or self.timeout_ms
+        
+        if timeout_ms is None or timeout_ms <= 0:
+            return await coro
+            
+        try:
+            return await asyncio.wait_for(coro, timeout=timeout_ms/1000.0)
+        except asyncio.TimeoutError:
+            error = {
+                'type': 'task_timeout',
+                'message': f'Task timed out after {timeout_ms}ms',
+                'timeout_ms': timeout_ms
+            }
+            self.fail(error)
+            raise TimeoutError(f"Task {self.id} timed out after {timeout_ms}ms")
 
     @property
     def duration_ms(self) -> Optional[int]:
@@ -53,52 +154,6 @@ class BaseTask(BaseModel):
     @property
     def is_finished(self) -> bool:
         return self.state in {TaskState.COMPLETED, TaskState.FAILED, TaskState.CANCELED}
-
-    def start(self) -> 'BaseTask':
-        self.state = TaskState.RUNNING
-        self.started_at = get_current_time_ms()
-        self._add_event('task_started')
-        logger.debug(f'Task {self.id} started.')
-        return self
-
-    def complete(self, output: Dict[str, Any]) -> 'BaseTask':
-        self.state = TaskState.COMPLETED
-        self.completed_at = get_current_time_ms()
-        self.output = output
-        self._add_event('task_completed', {'output_keys': list(output.keys())})
-        duration = self.duration_ms
-        if duration is not None:
-            track_task_completed('completed', duration / 1000.0)
-        logger.info(f'Task {self.id} completed successfully in {(duration if duration is not None else 'N/A')} ms.')
-        return self
-
-    def fail(self, error: Dict[str, Any]) -> 'BaseTask':
-        self.state = TaskState.FAILED
-        self.completed_at = get_current_time_ms()
-        self.error = error
-        self._add_event('task_failed', {'error': error})
-        duration = self.duration_ms
-        if duration is not None:
-            track_task_completed('failed', duration / 1000.0)
-        error_message = error.get('message', 'Unknown error')
-        logger.error(f'Task {self.id} failed in {(duration if duration is not None else 'N/A')} ms. Error: {error_message}')
-        return self
-
-    def cancel(self, reason: Optional[str]=None) -> 'BaseTask':
-        self.state = TaskState.CANCELED
-        self.completed_at = get_current_time_ms()
-        if reason:
-            if self.error is None:
-                self.error = {}
-            self.error['cancel_reason'] = reason
-        event_data = {'reason': reason} if reason else {}
-        self._add_event('task_canceled', event_data)
-        duration = self.duration_ms
-        if duration is not None:
-            track_task_completed('canceled', duration / 1000.0)
-        logger.warning(f'Task {self.id} canceled. Reason: {reason or 'No reason provided'}')
-        return self
-
     def update_metadata(self, key: str, value: Any) -> 'BaseTask':
         self.metadata[key] = value
         logger.debug(f'Updated metadata for task {self.id}: set {key}={value}')
@@ -123,16 +178,17 @@ class BaseTask(BaseModel):
     def _add_event(self, event_type: str, data: Optional[Dict[str, Any]]=None) -> None:
         self.event_history.append({'event_type': event_type, 'timestamp': get_current_time_ms(), 'data': data or {}})
 
-    class Config:
-        json_encoders = {datetime: lambda v: v.isoformat(), Enum: lambda v: v.value}
-        validate_assignment = True
-        arbitrary_types_allowed = True
-        extra = 'forbid'
+    model_config = {
+        "arbitrary_types_allowed": True,
+        "json_encoders": {datetime: lambda v: v.isoformat(), Enum: lambda v: v.value},
+        "validate_assignment": True,
+        "extra": 'forbid'
+    }
 
     @staticmethod
     def create(task_type: str, input_data: Dict[str, Any], **kwargs) -> 'BaseTask':
         task = BaseTask(type=task_type, input=input_data, **kwargs)
-        track_task_created()
+        metrics_manager.track_task("created")
         logger.info(f'Task created: ID={task.id}, Type={task.type}, Priority={task.priority.name}')
         return task
 
