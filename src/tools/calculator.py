@@ -1,7 +1,7 @@
 import ast
 import math
 import operator
-from typing import Any, Dict, List, Optional, Set, Union
+from typing import Any, Dict, List, Optional, Set, Type, Union
 from pydantic import BaseModel, Field, field_validator
 from src.config.errors import ErrorCode, ToolError
 from src.config.logger import get_logger

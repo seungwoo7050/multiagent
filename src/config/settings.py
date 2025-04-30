@@ -224,6 +224,12 @@ class Settings(BaseSettings):
     AUTH_REQUIRED: bool = False
     AUTH_TOKEN_EXPIRY: int = 86400  # 1 day in seconds
     
+    # Search API settings
+    GOOGLE_SEARCH_API_KEY: str = ""
+    GOOGLE_SEARCH_ENGINE_ID: str = ""
+    DUCKDUCKGO_PROXY_API_URL: str = "https://api.duckduckgo.com/"
+    SEARCH_CACHE_TTL: int = 3600  # 1 hour cache for search results
+    
     # Metrics settings
     METRICS_ENABLED: bool = True
     METRICS_PORT: int = 9090

@@ -1,4 +1,5 @@
-Please create detailed documentation for the refactored code and tests on artifacts. The documentation should serve as both a reference guide and a learning resource for developers working with this codebase. Include the following sections and elements:
+Using artifact.
+Please fill out one detailed document about the refactored code and test. The documentation should serve as both a reference guide and a learning resource for developers working with this codebase. Include the following sections and elements:
 Architecture Overview
 Provide a high-level overview of the system architecture, including:
 * The purpose and responsibility of each module

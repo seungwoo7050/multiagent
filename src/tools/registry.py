@@ -1,11 +1,15 @@
 import functools
 import inspect
 from typing import Any, Callable, Dict, List, Optional, Set, Type, TypeVar, cast, get_type_hints
+from pydantic import BaseModel
 from src.config.errors import ErrorCode, ToolError
 from src.config.logger import get_logger
-from src.config.metrics import CACHE_OPERATIONS_TOTAL, CACHE_SIZE
+from src.config.metrics import get_metrics_manager
 from src.tools.base import BaseTool
+
+metrics = get_metrics_manager()
 logger = get_logger(__name__)
+
 T = TypeVar('T', bound=Type[BaseTool])
 
 class ToolRegistry:
@@ -13,7 +17,7 @@ class ToolRegistry:
     def __init__(self):
         self._tools: Dict[str, Type[BaseTool]] = {}
         self._instance_cache: Dict[str, BaseTool] = {}
-        CACHE_SIZE.labels(cache_type='tool_registry').set(0)
+        metrics.track_registry('size', registry_name='tool_registry', value=0)
         logger.debug('ToolRegistry initialized.')
 
     def register(self, tool_cls: Type[BaseTool]) -> Type[BaseTool]:
@@ -28,8 +32,8 @@ class ToolRegistry:
             if tool_name in self._tools:
                 raise ToolError(code=ErrorCode.TOOL_VALIDATION_ERROR, message=f"Tool name '{tool_name}' is already registered by class '{self._tools[tool_name].__name__}'.", details={'name': tool_name, 'new_class': tool_cls.__name__, 'existing_class': self._tools[tool_name].__name__})
             self._tools[tool_name] = tool_cls
-            CACHE_OPERATIONS_TOTAL.labels(operation_type='tool_registration').inc()
-            CACHE_SIZE.labels(cache_type='tool_registry').set(len(self._tools))
+            metrics.track_registry('operations', registry_name='tool_registry', operation_type='registration')
+            metrics.track_registry('size', registry_name='tool_registry', value=len(self._tools))
             logger.info(f"Tool '{tool_name}' (Class: {tool_cls.__name__}) registered successfully.")
             return tool_cls
         except ToolError:
@@ -47,7 +51,7 @@ class ToolRegistry:
 
     def get_tool(self, tool_name: str) -> BaseTool:
         if tool_name in self._instance_cache:
-            CACHE_OPERATIONS_TOTAL.labels(operation_type='tool_cache_hit').inc()
+            metrics.track_registry('operations', registry_name='tool_registry', operation_type='cache_hit')
             logger.debug(f'Returning cached tool instance for: {tool_name}')
             return self._instance_cache[tool_name]
         logger.debug(f'Tool instance cache miss for: {tool_name}. Creating new instance.')
@@ -55,7 +59,7 @@ class ToolRegistry:
             tool_cls = self.get_tool_class(tool_name)
             tool_instance = tool_cls()
             self._instance_cache[tool_name] = tool_instance
-            CACHE_OPERATIONS_TOTAL.labels(operation_type='tool_cache_set').inc()
+            metrics.track_registry('operations', registry_name='tool_registry', operation_type='cache_set')
             logger.debug(f'Created and cached new tool instance for: {tool_name}')
             return tool_instance
         except ToolError:
