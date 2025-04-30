@@ -7,11 +7,15 @@ from src.config.logger import get_logger
 from src.config.settings import get_settings
 from src.config.metrics import get_metrics_manager, MEMORY_METRICS
 from src.config.errors import ErrorCode, LLMError, BaseError, RETRYABLE_ERRORS
+
 settings = get_settings()
 logger = get_logger(__name__)
+metrics = get_metrics_manager()
+
 F = TypeVar('F', bound=Callable[..., Any])
 AsyncF = TypeVar('AsyncF', bound=Callable[..., Any])
 R = TypeVar('R')
+
 DEFAULT_RETRYABLE_ERROR_CODES: Set[Union[ErrorCode, str]] = set(RETRYABLE_ERRORS)
 LLM_RETRYABLE_ERROR_CODES: Set[Union[ErrorCode, str]] = {ErrorCode.LLM_TIMEOUT, ErrorCode.LLM_RATE_LIMIT, ErrorCode.CONNECTION_ERROR, ErrorCode.HTTP_ERROR, ErrorCode.NETWORK_ERROR, ErrorCode.TIMEOUT_ERROR}
 DEFAULT_RETRYABLE_ERROR_CODES.update(LLM_RETRYABLE_ERROR_CODES)

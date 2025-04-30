@@ -4,7 +4,98 @@ from src.config.settings import get_settings
 from src.config.logger import get_logger
 settings = get_settings()
 logger = get_logger(__name__)
-_MODEL_REGISTRY: Dict[str, Dict[str, Any]] = {'gpt-4o': {'provider': 'openai', 'token_limit': 128000, 'supports_streaming': True, 'supports_function_calling': True, 'supports_json_mode': True, 'capabilities': ['general', 'reasoning', 'coding', 'math', 'vision'], 'description': 'Latest and most powerful OpenAI model with vision capabilities'}, 'gpt-4-turbo': {'provider': 'openai', 'token_limit': 128000, 'supports_streaming': True, 'supports_function_calling': True, 'supports_json_mode': True, 'capabilities': ['general', 'reasoning', 'coding', 'math'], 'description': 'Powerful model with large context window'}, 'gpt-4': {'provider': 'openai', 'token_limit': 8192, 'supports_streaming': True, 'supports_function_calling': True, 'supports_json_mode': True, 'capabilities': ['general', 'reasoning', 'coding', 'math'], 'description': 'Powerful reasoning model'}, 'gpt-4-32k': {'provider': 'openai', 'token_limit': 32768, 'supports_streaming': True, 'supports_function_calling': True, 'supports_json_mode': True, 'capabilities': ['general', 'reasoning', 'coding', 'math'], 'description': 'Powerful reasoning model with extended context window'}, 'gpt-3.5-turbo': {'provider': 'openai', 'token_limit': 16385, 'supports_streaming': True, 'supports_function_calling': True, 'supports_json_mode': True, 'capabilities': ['general', 'coding', 'math'], 'description': 'Fast and cost-effective model'}, 'claude-3-opus': {'provider': 'anthropic', 'token_limit': 200000, 'supports_streaming': True, 'supports_function_calling': False, 'supports_json_mode': False, 'capabilities': ['general', 'reasoning', 'coding', 'math', 'vision'], 'description': "Anthropic's most powerful model with vision capabilities"}, 'claude-3-sonnet': {'provider': 'anthropic', 'token_limit': 180000, 'supports_streaming': True, 'supports_function_calling': False, 'supports_json_mode': False, 'capabilities': ['general', 'reasoning', 'coding', 'math', 'vision'], 'description': 'Balance of intelligence and speed from Anthropic'}, 'claude-3-haiku': {'provider': 'anthropic', 'token_limit': 150000, 'supports_streaming': True, 'supports_function_calling': False, 'supports_json_mode': False, 'capabilities': ['general', 'coding', 'math', 'vision'], 'description': 'Fast and efficient model from Anthropic'}}
+_MODEL_REGISTRY: Dict[str, Dict[str, Any]] = {
+    'gpt-4o': {
+        'provider': 'openai', 
+        'token_limit': 128000, 
+        'supports_streaming': True, 
+        'supports_function_calling': True, 
+        'supports_json_mode': True, 
+        'capabilities': ['general', 'reasoning', 'coding', 'math', 'vision'], 
+        'description': 'Latest and most powerful OpenAI model with vision capabilities'
+        }, 
+    'gpt-4-turbo': {
+        'provider': 'openai',
+        'token_limit': 128000,
+        'supports_streaming': True,
+        'supports_function_calling': True,
+        'supports_json_mode': True,
+        'capabilities': ['general', 'reasoning', 'coding', 'math'],
+        'description': 'Powerful model with large context window'
+        }, 
+    'gpt-4': {
+        'provider': 'openai',
+        'token_limit': 8192,
+        'supports_streaming': True,
+        'supports_function_calling': True,
+        'supports_json_mode': True,
+        'capabilities': ['general', 'reasoning', 'coding', 'math'], 
+        'description': 'Powerful reasoning model'
+    }, 
+    'gpt-3.5-turbo': {
+        'provider': 'openai',
+        'token_limit': 16385,
+        'supports_streaming': True,
+        'supports_function_calling': True,
+        'supports_json_mode': True,
+        'capabilities': ['general', 'coding', 'math'],
+        'description': 'Fast and cost-effective model'
+    }, 
+    'claude-3-opus': {
+        'provider': 'anthropic', 
+        'token_limit': 200000, 
+        'supports_streaming': True, 
+        'supports_function_calling': False, 
+        'supports_json_mode': False, 
+        'capabilities': ['general', 'reasoning', 'coding', 'math', 'vision'], 
+        'description': "Anthropic's most powerful model with vision capabilities"
+    }, 
+    'claude-3-sonnet': {
+        'provider': 'anthropic', 
+        'token_limit': 180000, 
+        'supports_streaming': True, 
+        'supports_function_calling': False, 
+        'supports_json_mode': False, 
+        'capabilities': ['general', 'reasoning', 'coding', 'math', 'vision'], 
+        'description': 'Balance of intelligence and speed from Anthropic'
+    }, 
+    'claude-3-haiku': {
+        'provider': 'anthropic', 
+        'token_limit': 150000, 
+        'supports_streaming': True, 
+        'supports_function_calling': False, 
+        'supports_json_mode': False, 
+        'capabilities': ['general', 'coding', 'math', 'vision'], 
+        'description': 'Fast and efficient model from Anthropic'
+    },
+    'gemini-pro': {
+        'provider': 'gemini',
+        'token_limit': 32768,
+        'supports_streaming': True,
+        'supports_function_calling': False,
+        'supports_json_mode': False,
+        'capabilities': ['general', 'reasoning', 'coding', 'math'],
+        'description': 'Google Gemini Pro model with strong reasoning capabilities'
+    },
+    'gemini-pro-vision': {
+        'provider': 'gemini',
+        'token_limit': 32768,
+        'supports_streaming': True,
+        'supports_function_calling': False,
+        'supports_json_mode': False,
+        'capabilities': ['general', 'reasoning', 'coding', 'math', 'vision'],
+        'description': 'Google Gemini Pro Vision model with vision capabilities'
+    },
+    'gemini-1.5-pro': {
+        'provider': 'gemini',
+        'token_limit': 1048576,
+        'supports_streaming': True,
+        'supports_function_calling': False,
+        'supports_json_mode': False,
+        'capabilities': ['general', 'reasoning', 'coding', 'math'],
+        'description': 'Google Gemini 1.5 Pro model with 1M token context window'
+    },
+}
 
 def register_model(model_name: str, provider: str, token_limit: int, capabilities: List[str], description: str, supports_streaming: bool=True, supports_function_calling: bool=False, supports_json_mode: bool=False, additional_properties: Optional[Dict[str, Any]]=None) -> None:
     global _MODEL_REGISTRY

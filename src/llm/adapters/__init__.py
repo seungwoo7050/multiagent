@@ -18,6 +18,10 @@ def _lazy_load_adapter(provider: str) -> Optional[Type[BaseLLMAdapter]]:
         from src.llm.adapters.anthropic import AnthropicAdapter
         adapter_class = AnthropicAdapter
         logger.debug('Lazily loaded AnthropicAdapter.')
+    elif provider == 'gemini':
+        from src.llm.adapters.gemini import GeminiAdapter
+        adapter_class = GeminiAdapter
+        logger.debug('Lazily loaded GeminiAdapter.')
     else:
         logger.debug(f'No lazy loader found for provider: {provider}')
         return None

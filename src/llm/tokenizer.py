@@ -14,8 +14,37 @@ metrics = get_metrics_manager()
 _TOKENIZER_CACHE: Dict[str, Any] = {}
 _TOKEN_COUNT_CACHE: Dict[str, int] = {}
 _MAX_CACHE_SIZE: int = 10000
-MODEL_TOKEN_LIMITS: Dict[str, int] = {'gpt-4': 8192, 'gpt-4-32k': 32768, 'gpt-4-turbo': 128000, 'gpt-4o': 128000, 'gpt-3.5-turbo': 16385, 'gpt-3.5-turbo-16k': 16385, 'text-davinci-003': 4097, 'text-davinci-002': 4097, 'davinci': 2049, 'claude-3-opus': 200000, 'claude-3-sonnet': 180000, 'claude-3-haiku': 150000, 'claude-2': 100000, 'claude-1': 100000}
-MODEL_TO_ENCODING: Dict[str, str] = {'gpt-4': 'cl100k_base', 'gpt-4o': 'cl100k_base', 'gpt-4-turbo': 'cl100k_base', 'gpt-3.5-turbo': 'cl100k_base', 'text-embedding-ada-002': 'cl100k_base', 'text-davinci-003': 'p50k_base', 'text-davinci-002': 'p50k_base', 'davinci': 'p50k_base', 'openai-default': 'cl100k_base'}
+MODEL_TOKEN_LIMITS: Dict[str, int] = {
+    'gpt-4': 8192, 
+    'gpt-4-32k': 32768, 
+    'gpt-4-turbo': 128000, 
+    'gpt-4o': 128000, 
+    'gpt-3.5-turbo': 16385, 
+    'gpt-3.5-turbo-16k': 16385, 
+    'text-davinci-003': 4097, 
+    'text-davinci-002': 4097, 
+    'davinci': 2049, 
+    'claude-3-opus': 200000, 
+    'claude-3-sonnet': 180000, 
+    'claude-3-haiku': 150000, 
+    'claude-2': 100000, 
+    'claude-1': 100000
+}
+MODEL_TO_ENCODING: Dict[str, str] = {
+    'gpt-4': 'cl100k_base', 
+    'gpt-4o': 'cl100k_base', 
+    'gpt-4-turbo': 'cl100k_base', 
+    'gpt-3.5-turbo': 'cl100k_base', 
+    'text-embedding-ada-002': 'cl100k_base',
+    'text-davinci-003': 'p50k_base',
+    'text-davinci-002': 'p50k_base',
+    'davinci': 'p50k_base',
+    'openai-default': 'cl100k_base',
+    'gemini-pro': 'cl100k_base',
+    'gemini-pro-vision': 'cl100k_base',
+    'gemini-1.5-pro': 'cl100k_base',
+    'gemini-1.5-flash': 'cl100k_base'
+}
 
 def _get_cache_key(text: str, model: Optional[str]=None) -> str:
     if model:
