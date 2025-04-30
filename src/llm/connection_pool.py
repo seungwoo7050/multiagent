@@ -5,14 +5,17 @@ import aiohttp
 from aiohttp.client import ClientTimeout
 from src.config.settings import get_settings
 from src.config.logger import get_logger
-from src.config.metrics import MEMORY_OPERATION_DURATION, track_memory_operation, track_memory_operation_completed, timed_metric
+from src.config.metrics import get_metrics_manager, MEMORY_METRICS
 from src.config.errors import ConnectionError, ErrorCode, BaseError, convert_exception
+
 settings = get_settings()
 logger = get_logger(__name__)
+metrics = get_metrics_manager()
+
 _CONNECTION_POOLS: Dict[str, aiohttp.ClientSession] = {}
 _POOL_CREATION_LOCKS: Dict[str, asyncio.Lock] = {}
 
-@timed_metric(MEMORY_OPERATION_DURATION, {'operation_type': 'get_llm_connection_pool'})
+@metrics.timed_metric(MEMORY_METRICS['duration'], {'operation_type': 'get_llm_connection_pool'})
 async def get_connection_pool(provider: str) -> aiohttp.ClientSession:
     provider = provider.lower()
     if provider in _CONNECTION_POOLS:
@@ -33,7 +36,6 @@ async def get_connection_pool(provider: str) -> aiohttp.ClientSession:
             return _CONNECTION_POOLS[provider]
         logger.info(f'Creating new connection pool (aiohttp.ClientSession) for LLM provider: {provider}')
         try:
-            track_memory_operation(f'create_llm_connection_pool_{provider}')
             start_time = time.monotonic()
             provider_config = settings.LLM_PROVIDERS_CONFIG.get(provider, {})
             pool_size = provider_config.get('connection_pool_size', 10)
@@ -43,7 +45,6 @@ async def get_connection_pool(provider: str) -> aiohttp.ClientSession:
             session = aiohttp.ClientSession(connector=connector, timeout=timeout, raise_for_status=False, trust_env=True)
             _CONNECTION_POOLS[provider] = session
             duration = time.monotonic() - start_time
-            track_memory_operation_completed(f'create_llm_connection_pool_{provider}', duration)
             logger.info(f'Successfully created connection pool for {provider} (Size: {pool_size}, Timeout: {timeout_seconds}s)')
             return session
         except Exception as e:

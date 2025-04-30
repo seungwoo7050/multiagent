@@ -25,9 +25,9 @@ from src.llm.failure_detector import should_fallback_immediately
 
 
 from src.config.errors import LLMError, ErrorCode
-from src.config.metrics import track_llm_fallback, track_llm_error
+from src.config.metrics import get_metrics_manager
 
-
+metrics = get_metrics_manager()
 settings = get_settings()
 logger: ContextLoggerAdapter = get_logger_with_context(__name__)
 
@@ -118,75 +118,71 @@ class LLMFallbackHandler:
              model_start_time = time.monotonic()
              adapter: Optional[BaseLLMAdapter] = None
 
-             try:
+            try:
 
-                  logger.debug(f"Attempting LLM call with model: {model_name}")
+                logger.debug(f"Attempting LLM call with model: {model_name}")
+                adapter = get_llm_adapter_instance(
+                    model=model_name,
 
-                  adapter = get_llm_adapter_instance(
-                      model=model_name,
+                    timeout=kwargs.get('timeout', settings.REQUEST_TIMEOUT),
+                    max_retries=0
+                )
 
-                      timeout=kwargs.get('timeout', settings.REQUEST_TIMEOUT),
-                      max_retries=0
-                  )
-
-
-
-
-                  result: Dict[str, Any] = await adapter.generate(
-                      prompt=prompt,
-                      max_tokens=max_tokens,
-                      temperature=temperature,
-                      top_p=top_p,
-                      stop_sequences=stop_sequences,
-                      use_cache=use_cache,
-                      retry_on_failure=False,
-                      **kwargs
-                  )
+                result: Dict[str, Any] = await adapter.generate(
+                    prompt=prompt,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                    top_p=top_p,
+                    stop_sequences=stop_sequences,
+                    use_cache=use_cache,
+                    retry_on_failure=False,
+                    **kwargs
+                )
 
 
-                  success_model_name: str = model_name
-                  process_duration_s: float = time.monotonic() - model_start_time
-                  total_duration_s: float = time.monotonic() - start_time
-                  logger.info(f"LLM call successful with model '{success_model_name}' in {process_duration_s:.3f}s (Total: {total_duration_s:.3f}s)")
+                success_model_name: str = model_name
+                process_duration_s: float = time.monotonic() - model_start_time
+                total_duration_s: float = time.monotonic() - start_time
+                logger.info(f"LLM call successful with model '{success_model_name}' in {process_duration_s:.3f}s (Total: {total_duration_s:.3f}s)")
 
 
-                  if self.track_metrics and success_model_name != primary_model:
+                if self.track_metrics and success_model_name != primary_model:
 
-                       track_llm_fallback(primary_model, success_model_name)
+                metrics.track_llm('fallbacks', from_model=primary_model, to_model=success_model_name)
 
 
-                  return success_model_name, result
+                return success_model_name, result
 
-             except Exception as e:
+            except Exception as e:
 
-                  process_duration_s = time.monotonic() - model_start_time
-                  error_message = str(e)
-                  errors_encountered[model_name] = error_message
-                  logger.warning(f"Model '{model_name}' failed after {process_duration_s:.3f}s. Error: {error_message}")
+                process_duration_s = time.monotonic() - model_start_time
+                error_message = str(e)
+                errors_encountered[model_name] = error_message
+                logger.warning(f"Model '{model_name}' failed after {process_duration_s:.3f}s. Error: {error_message}")
 
 
 
-                  if should_fallback_immediately(e):
-                       logger.warning(f"Error type ({type(e).__name__}) suggests immediate fallback for model '{model_name}'.")
+                if should_fallback_immediately(e):
+                    logger.warning(f"Error type ({type(e).__name__}) suggests immediate fallback for model '{model_name}'.")
 
-                  else:
-
-
-                       logger.info(f"Potentially retryable error for model '{model_name}'. Proceeding to next fallback model (no retry implemented here).")
+                else:
 
 
-                  if self.track_metrics and adapter:
-                       error_type = type(e).__name__
-                       if isinstance(e, LLMError) and e.code:
-                            error_type = e.code.value if isinstance(e.code, ErrorCode) else str(e.code)
+                    logger.info(f"Potentially retryable error for model '{model_name}'. Proceeding to next fallback model (no retry implemented here).")
+
+
+                if self.track_metrics and adapter:
+                    error_type = type(e).__name__
+                    if isinstance(e, LLMError) and e.code:
+                        error_type = e.code.value if isinstance(e.code, ErrorCode) else str(e.code)
 
 
 
 
-                       track_llm_error(model_name, adapter.provider, error_type)
+                    metrics.track_llm('errors', model=model_name, provider=adapter.provider, error_type=error_type)
 
 
-                  continue
+                continue
 
 
         total_duration_s = time.monotonic() - start_time

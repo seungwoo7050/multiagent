@@ -1,14 +1,16 @@
 import asyncio
 from typing import Any, Dict, Optional, Type, Union, cast, List
 from src.config.logger import get_logger
-from src.config.metrics import track_agent_created
+from src.config.metrics import get_metrics_manager, AGENT_METRICS
 from src.agents.config import AgentConfig
 from src.core.agent import BaseAgent
 from src.agents.mcp_planner import MCPPlannerAgent
 from src.agents.mcp_executor import MCPExecutorAgent
 from src.core.exceptions import AgentExecutionError, AgentCreationError, AgentNotFoundError
 from src.utils.timing import async_timed, get_current_time_ms
+
 logger = get_logger(__name__)
+metrics = get_metrics_manager()
 
 class AgentFactory:
 
@@ -84,7 +86,7 @@ class AgentFactory:
             if should_use_cache:
                 self._agent_instances[effective_cache_key] = (agent, get_current_time_ms())
                 logger.debug(f'Cached new agent instance for: {agent_name}')
-            track_agent_created(agent_type)
+            metrics.track_agent('created', agent_type=agent_type)
             return agent
         except AgentCreationError as ace:
             raise ace

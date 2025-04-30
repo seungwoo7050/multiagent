@@ -2,12 +2,14 @@ import re
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
 from src.config.logger import get_logger
 from src.config.settings import get_settings
-from src.config.metrics import timed_metric, MEMORY_OPERATION_DURATION
+from src.config.metrics import get_metrics_manager, MEMORY_METRICS
 from src.llm.tokenizer import count_tokens_sync
+
+metrics = get_metrics_manager()
 settings = get_settings()
 logger = get_logger(__name__)
 
-@timed_metric(MEMORY_OPERATION_DURATION, {'operation_type': 'optimize_prompt'})
+@metrics.timed_metric(MEMORY_METRICS['duration'], {'operation_type': 'optimize_prompt'})
 def optimize_prompt(prompt: str, model: str, target_token_count: Optional[int]=None, max_token_reduction_ratio: float=0.3, preserve_recent_context: bool=True, preserve_instructions: bool=True) -> str:
     try:
         current_token_count = count_tokens_sync(model, prompt)
@@ -167,7 +169,7 @@ def _trim_context(prompt: str, model: str, target_token_count: int, preserve_rec
     logger.debug(f'Context trimming finished. Final tokens: {final_check_tokens} (Target: {target_token_count})')
     return optimized_prompt_final
 
-@timed_metric(MEMORY_OPERATION_DURATION, {'operation_type': 'optimize_chat_messages'})
+@metrics.timed_metric(MEMORY_METRICS['duration'], {'operation_type': 'optimize_chat_messages'})
 def optimize_chat_messages(messages: List[Dict[str, str]], model: str, target_token_count: Optional[int]=None, max_token_reduction_ratio: float=0.3, preserve_recent_messages: bool=True, preserve_system_message: bool=True) -> List[Dict[str, str]]:
     if not messages:
         return messages

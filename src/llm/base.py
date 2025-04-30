@@ -4,15 +4,18 @@ import hashlib
 import json
 import time
 from typing import Any, Dict, List, Optional, Tuple, Union, TypeVar, Generic
-from src.config.metrics import LLM_REQUESTS_TOTAL, LLM_REQUEST_DURATION, LLM_TOKEN_USAGE, LLM_ERRORS_TOTAL, track_llm_request, track_llm_response, track_llm_error
+from src.config.metrics import get_metrics_manager, LLM_METRICS
 from src.config.logger import get_logger
 from src.config.settings import get_settings
 from src.config.errors import LLMError, ErrorCode
 from src.utils.timing import async_timed
 from src.llm.cache import get_cache, cache_result
 from src.llm.tokenizer import count_tokens
+
 settings = get_settings()
 logger = get_logger(__name__)
+metrics = get_metrics_manager()
+
 T = TypeVar('T')
 
 class BaseLLMAdapter(abc.ABC):
@@ -78,13 +81,15 @@ class BaseLLMAdapter(abc.ABC):
         else:
             self.average_latency = latency
         if not is_cached:
-            track_llm_request(self.model, self.provider)
-            track_llm_response(self.model, self.provider, latency, prompt_tokens, completion_tokens)
+            metrics.track_llm('requests', model=self.model, provider=self.provider)
+            metrics.track_llm('duration', model=self.model, provider=self.provider, value=latency)
+            metrics.track_llm('tokens', model=self.model, provider=self.provider, type='prompt', value=prompt_tokens)
+            metrics.track_llm('tokens', model=self.model, provider=self.provider, type='completion', value=completion_tokens)
             logger.debug(f'Logged LLM metrics for {self.model} ({self.provider}). Latency: {latency:.4f}s, Tokens: P {prompt_tokens}/C {completion_tokens}')
 
     def _log_error_metrics(self, error_type: str) -> None:
         self.error_count += 1
-        track_llm_error(self.model, self.provider, error_type)
+        metrics.track_llm('errors', model=self.model, provider=self.provider, error_type=error_type)
         logger.debug(f'Logged LLM error metric for {self.model} ({self.provider}). Error type: {error_type}')
 
     async def ensure_initialized(self) -> bool:

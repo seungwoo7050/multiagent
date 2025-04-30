@@ -5,9 +5,12 @@ from typing import Dict, Optional, Union, List, Tuple, Any
 import tiktoken
 from src.config.logger import get_logger
 from src.config.settings import get_settings
-from src.config.metrics import timed_metric, MEMORY_OPERATION_DURATION
+from src.config.metrics import get_metrics_manager, MEMORY_METRICS
+
 settings = get_settings()
 logger = get_logger(__name__)
+metrics = get_metrics_manager()
+
 _TOKENIZER_CACHE: Dict[str, Any] = {}
 _TOKEN_COUNT_CACHE: Dict[str, int] = {}
 _MAX_CACHE_SIZE: int = 10000
@@ -53,7 +56,7 @@ def _approximate_token_count(text: str) -> int:
     logger.debug(f'Approximated token count for text (length {char_count}): {approx_tokens}')
     return approx_tokens
 
-@timed_metric(MEMORY_OPERATION_DURATION, {'operation_type': 'count_tokens'})
+@metrics.timed_metric(MEMORY_METRICS['duration'], {'operation_type': 'count_tokens'})
 async def count_tokens(model: str, text: str) -> int:
     global _TOKEN_COUNT_CACHE
     cache_key = _get_cache_key(text, model)

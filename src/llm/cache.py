@@ -7,11 +7,14 @@ import hashlib
 from functools import lru_cache
 from src.config.settings import get_settings
 from src.config.logger import get_logger
-from src.config.metrics import CACHE_OPERATIONS_TOTAL, CACHE_HITS_TOTAL, CACHE_MISSES_TOTAL, CACHE_SIZE, track_cache_operation, track_cache_hit, track_cache_miss, track_cache_size, timed_metric, MEMORY_OPERATION_DURATION
+from src.config.metrics import get_metrics_manager, CACHE_METRICS, MEMORY_METRICS
 from src.config.errors import MemoryError, ErrorCode
 from src.config.connections import get_redis_async_connection
+
 settings = get_settings()
 logger = get_logger(__name__)
+metrics = get_metrics_manager()
+
 T = TypeVar('T')
 _CACHE_INSTANCE = None
 _CACHE_LOCK = asyncio.Lock()
@@ -97,16 +100,16 @@ class TwoLevelCache(LLMCache[T]):
             self.local_cache.pop(oldest_key, None)
             logger.debug(f'L1 cache evicted key: {oldest_key} (size exceeded {self.local_maxsize})')
 
-    @timed_metric(MEMORY_OPERATION_DURATION, {'operation_type': 'cache_get'})
+    @metrics.timed_metric(MEMORY_METRICS['duration'], {'operation_type': 'cache_get'})
     async def get(self, key: str) -> Optional[T]:
-        track_cache_operation('get')
+        metrics.track_cache('operations', operation_type='get')
         if key in self.local_cache:
             entry = self.local_cache[key]
             expires_at = entry.get('expires_at')
             if expires_at is None or expires_at > time.time():
                 self._update_lru_order(key)
                 self.hit_count += 1
-                track_cache_hit('local')
+                metrics.track_cache('hits', cache_type='local')
                 logger.debug(f'L1 cache hit for key: {key}')
                 return cast(T, entry['value'])
             else:
@@ -117,14 +120,13 @@ class TwoLevelCache(LLMCache[T]):
         initialized = await self._ensure_initialized()
         if not initialized or self._redis is None:
             self.miss_count += 1
-            track_cache_miss('local')
+            metrics.track_cache('misses', cache_type='local')
             logger.warning(f"Cannot check L2 cache for key '{key}': Redis not initialized.")
             return None
         try:
             redis_key = self._get_redis_key(key)
             start_time = time.time()
             serialized = await self._redis.get(redis_key)
-            track_memory_operation_completed('redis_get_cache', time.time() - start_time)
             if serialized is not None:
                 value: T = self.deserializer(serialized)
                 redis_ttl = await self._redis.ttl(redis_key)
@@ -135,32 +137,32 @@ class TwoLevelCache(LLMCache[T]):
                     l1_expires_at = None
                 self.local_cache[key] = {'value': value, 'expires_at': l1_expires_at}
                 self._update_lru_order(key)
-                track_cache_size('local', len(self.local_cache))
+                metrics.track_cache('size', cache_type='local', value=len(self.local_cache))
                 self.hit_count += 1
-                track_cache_hit('redis')
+                metrics.track_cache('hits', cache_type='redis')
                 logger.debug(f'L2 cache hit for key: {key}. Stored in L1.')
                 return value
             else:
                 self.miss_count += 1
-                track_cache_miss('redis')
+                metrics.track_cache('misses', cache_type='redis')
                 logger.debug(f'Cache miss for key: {key} (not found in L1 or L2).')
                 return None
         except Exception as e:
             logger.warning(f"Error retrieving key '{key}' from Redis cache: {str(e)}", exc_info=True)
             self.miss_count += 1
-            track_cache_miss('redis_error')
+            metrics.track_cache('misses', cache_type='redis_error')
             return None
 
-    @timed_metric(MEMORY_OPERATION_DURATION, {'operation_type': 'cache_set'})
+    @metrics.timed_metric(MEMORY_METRICS['duration'], {'operation_type': 'cache_set'})
     async def set(self, key: str, value: T, ttl: Optional[int]=None) -> bool:
-        track_cache_operation('set')
+        metrics.track_cache('operations', operation_type='set')
         effective_ttl = ttl if ttl is not None else self.ttl
         l1_expires_at: Optional[float] = None
         if effective_ttl > 0:
             l1_expires_at = time.time() + effective_ttl
         self.local_cache[key] = {'value': value, 'expires_at': l1_expires_at}
         self._update_lru_order(key)
-        track_cache_size('local', len(self.local_cache))
+        metrics.track_cache('size', cache_type='local', value=len(self.local_cache))
         initialized = await self._ensure_initialized()
         if not initialized or self._redis is None:
             logger.warning(f"Cannot save key '{key}' to L2 cache: Redis not initialized.")
@@ -173,7 +175,6 @@ class TwoLevelCache(LLMCache[T]):
                 await self._redis.setex(redis_key, effective_ttl, serialized)
             else:
                 await self._redis.set(redis_key, serialized)
-            track_memory_operation_completed('redis_set_cache', time.time() - start_time)
             self.set_count += 1
             logger.debug(f"Set key '{key}' in L1 and L2 cache. TTL: {effective_ttl}s.")
             return True
@@ -181,16 +182,16 @@ class TwoLevelCache(LLMCache[T]):
             logger.warning(f"Error storing key '{key}' in Redis cache: {str(e)}", exc_info=True)
             return False
 
-    @timed_metric(MEMORY_OPERATION_DURATION, {'operation_type': 'cache_delete'})
+    @metrics.timed_metric(MEMORY_METRICS['duration'], {'operation_type': 'cache_delete'})
     async def delete(self, key: str) -> bool:
-        track_cache_operation('delete')
+        metrics.track_cache('operations', operation_type='delete')
         deleted_from_l1 = False
         if key in self.local_cache:
             self.local_cache.pop(key, None)
             if key in self.local_cache_order:
                 self.local_cache_order.remove(key)
             deleted_from_l1 = True
-            track_cache_size('local', len(self.local_cache))
+            metrics.track_cache('size', cache_type='local', value=len(self.local_cache))
             logger.debug(f"Deleted key '{key}' from L1 cache.")
         initialized = await self._ensure_initialized()
         if not initialized or self._redis is None:
@@ -200,7 +201,6 @@ class TwoLevelCache(LLMCache[T]):
             redis_key = self._get_redis_key(key)
             start_time = time.time()
             deleted_count = await self._redis.delete(redis_key)
-            track_memory_operation_completed('redis_delete_cache', time.time() - start_time)
             self.delete_count += 1
             deleted_from_l2 = deleted_count > 0
             if deleted_from_l2:
@@ -212,13 +212,13 @@ class TwoLevelCache(LLMCache[T]):
             logger.warning(f"Error deleting key '{key}' from Redis cache: {str(e)}", exc_info=True)
             return False
 
-    @timed_metric(MEMORY_OPERATION_DURATION, {'operation_type': 'cache_clear'})
+    @metrics.timed_metric(MEMORY_METRICS['duration'], {'operation_type': 'cache_clear'})
     async def clear(self) -> bool:
-        track_cache_operation('clear')
+        metrics.track_cache('operations', operation_type='clear')
         l1_cleared_count = len(self.local_cache)
         self.local_cache.clear()
         self.local_cache_order.clear()
-        track_cache_size('local', 0)
+        metrics.track_cache('size', cache_type='local', value=0)
         logger.info(f'Cleared L1 cache ({l1_cleared_count} items).')
         initialized = await self._ensure_initialized()
         if not initialized or self._redis is None:
@@ -244,7 +244,6 @@ class TwoLevelCache(LLMCache[T]):
                 except ValueError:
                     logger.error(f'Unexpected cursor value from Redis SCAN: {cursor}')
                     break
-            track_memory_operation_completed('redis_clear_namespace', time.time() - start_time)
             logger.info(f"Cleared {deleted_count} keys from Redis cache namespace '{self.namespace}'.")
             return True
         except Exception as e:
@@ -264,7 +263,6 @@ class TwoLevelCache(LLMCache[T]):
                     redis_key_count += len(keys)
                     if cursor == b'0' or int(cursor) == 0:
                         break
-                track_memory_operation_completed('redis_scan_stats', time.time() - start_time)
                 stats['redis_key_count_in_namespace'] = redis_key_count
                 stats['redis_connected'] = True
             except Exception as e:

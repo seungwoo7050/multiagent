@@ -7,13 +7,16 @@ from src.llm.base import BaseLLMAdapter
 from src.core.mcp.llm.context_transform import transform_llm_input_for_model
 from src.config.logger import get_logger
 from src.config.settings import get_settings
-from src.config.metrics import MEMORY_OPERATION_DURATION, LLM_REQUESTS_TOTAL, LLM_FALLBACKS_TOTAL, track_llm_fallback, timed_metric
+from src.config.metrics import get_metrics_manager, MEMORY_METRICS, LLM_METRICS
 from src.config.errors import LLMError, ErrorCode
+
 settings = get_settings()
 logger = get_logger(__name__)
+metrics = get_metrics_manager()
+
 T = TypeVar('T')
 
-@timed_metric(MEMORY_OPERATION_DURATION, {'operation_type': 'execute_parallel'})
+@metrics.timed_metric(MEMORY_METRICS['duration'], {'operation_type': 'execute_parallel'})
 async def execute_parallel(operations: List[Callable[[], Coroutine[Any, Any, Any]]], timeout: Optional[float]=None, return_exceptions: bool=False, cancel_on_first_exception: bool=False, cancel_on_first_result: bool=False, max_wait_time: float=1.0) -> List[Any]:
     if not operations:
         return []
@@ -128,7 +131,7 @@ async def _create_adapters_concurrently(models: List[str]) -> Dict[str, BaseLLMA
     logger.debug(f'Concurrently created {len(adapter_map)} adapters out of {len(models)} requested.')
     return adapter_map
 
-@timed_metric(MEMORY_OPERATION_DURATION, {'operation_type': 'race_models'})
+@metrics.timed_metric(MEMORY_METRICS['duration'], {'operation_type': 'race_models'})
 async def race_models(models: List[str], prompt: Union[str, List[Dict[str, str]]], max_tokens: Optional[int]=None, temperature: Optional[float]=None, top_p: Optional[float]=None, additional_params: Optional[Dict[str, Any]]=None, timeout: Optional[float]=None, track_metrics: bool=True) -> Tuple[str, Dict[str, Any]]:
     if not models:
         raise ValueError('At least one model must be provided for race_models')
@@ -152,7 +155,7 @@ async def race_models(models: List[str], prompt: Union[str, List[Dict[str, str]]
 
         async def generate_for_model(adapter_instance: BaseLLMAdapter=adapter, model_id: str=model_name) -> Dict[str, Any]:
             if track_metrics:
-                track_llm_request(model_id, adapter_instance.provider)
+                metrics.track_llm('requests', model=model_id, provider=adapter_instance.provider)
             try:
                 response: Dict[str, Any] = await adapter_instance.generate(prompt=prompt, max_tokens=max_tokens, temperature=temperature, top_p=top_p, **additional_params)
                 return {'model': model_id, 'response': response, 'success': True}
@@ -185,7 +188,7 @@ async def race_models(models: List[str], prompt: Union[str, List[Dict[str, str]]
         race_duration: float = time.monotonic() - start_time
         primary_model = models[0]
         if track_metrics and winner_model != primary_model:
-            track_llm_fallback(primary_model, winner_model)
+            metrics.track_llm('fallbacks', from_model=primary_model, to_model=winner_model)
         logger.info(f"Model race won by '{winner_model}' in {race_duration:.3f}s.")
         return (winner_model, response)
     else:
@@ -194,7 +197,7 @@ async def race_models(models: List[str], prompt: Union[str, List[Dict[str, str]]
         logger.error(error_msg, extra={'errors': errors_encountered})
         raise LLMError(code=ErrorCode.LLM_API_ERROR, message=error_msg, details={'models': models, 'errors': errors_encountered, 'duration_s': race_duration})
 
-@timed_metric(MEMORY_OPERATION_DURATION, {'operation_type': 'execute_with_fallbacks'})
+@metrics.timed_metric(MEMORY_METRICS['duration'], {'operation_type': 'execute_with_fallbacks'})
 async def execute_with_fallbacks(primary_model: str, fallback_models: List[str], prompt: Union[str, List[Dict[str, str]]], max_tokens: Optional[int]=None, temperature: Optional[float]=None, top_p: Optional[float]=None, additional_params: Optional[Dict[str, Any]]=None, timeout: Optional[float]=None, track_metrics: bool=True) -> Tuple[str, Dict[str, Any]]:
     if not primary_model:
         raise ValueError('primary_model must be provided for execute_with_fallbacks')
@@ -228,14 +231,14 @@ async def execute_with_fallbacks(primary_model: str, fallback_models: List[str],
             break
         logger.info(f"Attempting request with model '{model_name}' (Timeout: {remaining_timeout_for_this_call:.3f}s)")
         if track_metrics:
-            track_llm_request(model_name, adapter.provider)
+            metrics.track_llm('requests', model=model_name, provider=adapter.provider)
         try:
             transformed_prompt = await transform_llm_input_for_model(original_input=prompt, target_adapter=adapter)
             response: Dict[str, Any] = await asyncio.wait_for(adapter.generate(prompt=transformed_prompt, max_tokens=max_tokens, temperature=temperature, top_p=top_p, **additional_params or {}), timeout=remaining_timeout_for_this_call)
             success_model: str = model_name
             model_execution_time: float = time.monotonic() - model_start_time
             if track_metrics and success_model != primary_model:
-                track_llm_fallback(primary_model, success_model)
+                metrics.track_llm('fallbacks', from_model=primary_model, to_model=success_model)
             log_msg = f"Successfully executed with model '{success_model}' in {model_execution_time:.3f}s"
             if success_model != primary_model:
                 log_msg += f" (fallback from '{primary_model}')"
@@ -247,12 +250,12 @@ async def execute_with_fallbacks(primary_model: str, fallback_models: List[str],
                 errors[model_name] = e
                 logger.warning(f"Model '{model_name}' failed with non-retryable error ({type(e).__name__}). Falling back immediately. Error: {str(e)}")
                 if track_metrics:
-                    track_llm_error(model_name, adapter.provider, type(e).__name__)
+                    metrics.track_llm('errors', model=model_name, provider=adapter.provider, error_type=type(e).__name__)
             else:
                 errors[model_name] = e
                 logger.warning(f"Model '{model_name}' failed with potentially retryable error: {e}. Trying next fallback model.")
                 if track_metrics:
-                    track_llm_error(model_name, adapter.provider, type(e).__name__)
+                    metrics.track_llm('errors', model=model_name, provider=adapter.provider, error_type=type(e).__name__)
     total_duration: float = time.monotonic() - start_time
     final_error_msg = f'All models failed ({', '.join(all_models_to_try)}) after {total_duration:.3f}s.'
     error_details: Dict[str, str] = {model: str(err) for model, err in errors.items()}

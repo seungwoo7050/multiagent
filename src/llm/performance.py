@@ -5,8 +5,10 @@ from typing import Dict, Optional, Deque, Tuple, Any
 from pydantic import BaseModel, Field, ConfigDict
 from src.config.logger import get_logger
 from src.config.settings import get_settings
-from src.config.metrics import track_llm_request, track_llm_response, track_llm_error
+from src.config.metrics import get_metrics_manager
 from src.utils.timing import get_current_time_ms
+
+metrics = get_metrics_manager()
 settings = get_settings()
 logger = get_logger(__name__)
 
@@ -53,7 +55,7 @@ class LLMPerformanceTracker:
             stats = self._model_stats.setdefault(model, ModelPerformanceStats(model_name=model, provider=provider, recent_requests=deque(maxlen=self.history_size)))
             stats.request_count += 1
             stats.last_request_time_ms = get_current_time_ms()
-        track_llm_request(model, provider)
+        metrics.track_llm('requests', model=model, provider=provider)
         logger.debug(f'Recorded start of request for model {model}')
 
     async def record_success(self, model: str, provider: str, latency_ms: int, prompt_tokens: int, completion_tokens: int, context_labels: Optional[Dict[str, str]]=None) -> None:
@@ -64,7 +66,10 @@ class LLMPerformanceTracker:
             stats.total_prompt_tokens += prompt_tokens
             stats.total_completion_tokens += completion_tokens
             stats.recent_requests.append((get_current_time_ms(), latency_ms, True))
-        track_llm_response(model, provider, latency_ms / 1000.0, prompt_tokens, completion_tokens, context_labels=context_labels)
+            
+        metrics.track_llm('duration', model=model, provider=provider, value=latency_ms / 1000.0, **(context_labels or {}))
+        metrics.track_llm('tokens', model=model, provider=provider, type='prompt', value=prompt_tokens, **(context_labels or {}))
+        metrics.track_llm('tokens', model=model, provider=provider, type='completion', value=completion_tokens, **(context_labels or {}))
         logger.debug(f'Recorded successful response for model {model} (Latency: {latency_ms}ms)')
 
     async def record_failure(self, model: str, provider: str, error_type: str, latency_ms: Optional[int]=None, context_labels: Optional[Dict[str, str]]=None) -> None:
@@ -75,7 +80,7 @@ class LLMPerformanceTracker:
             stats.last_error_time_ms = current_time_ms
             failure_latency = latency_ms if latency_ms is not None else 0
             stats.recent_requests.append((current_time_ms, failure_latency, False))
-        track_llm_error(model, provider, error_type, context_labels=context_labels)
+        metrics.track_llm('errors', model=model, provider=provider, error_type=error_type, **(context_labels or {}))
         logger.debug(f'Recorded failed response for model {model} (Error: {error_type})')
 
     async def get_performance_stats(self, model: str) -> Optional[ModelPerformanceStats]:
