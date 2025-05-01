@@ -4,12 +4,14 @@ from enum import Enum
 from typing import Any, Callable, Coroutine, Dict, List, Optional, Set, Tuple, TypeVar, cast
 from pydantic import BaseModel, Field, validator, ConfigDict
 from src.config.logger import get_logger
-from src.config.metrics import TASK_QUEUE_DEPTH, TASK_PROCESSING, track_task_completed
+from src.config.metrics import get_metrics_manager
 from src.config.settings import get_settings
 from src.core.exceptions import WorkerPoolError
 from src.utils.timing import AsyncTimer, Timer, get_current_time_ms
+
 logger = get_logger(__name__)
 settings = get_settings()
+metrics = get_metrics_manager()
 T = TypeVar('T')
 R = TypeVar('R')
 
@@ -137,7 +139,9 @@ class QueueWorkerPool:
                     execution_time_ms: int = get_current_time_ms() - task_start_time if task_start_time > 0 else 0
                     await self._update_completion_metrics(success, execution_time_ms)
                     metric_status: str = 'success' if success else 'failure'
-                    track_task_completed(metric_status, execution_time_ms / 1000.0)
+                    duration_sec = execution_time_ms / 1000.0
+                    metrics.track_task('completed', status=metric_status)
+                    metrics.track_task('duration', status=metric_status, value=duration_sec)
                     if self._worker_states.get(worker_name) == 'busy':
                         self._concurrency_semaphore.release()
                         logger.debug(f'Worker {worker_name} released concurrency semaphore.')
@@ -166,7 +170,7 @@ class QueueWorkerPool:
             self.metrics.running_tasks = max(0, self.metrics.running_tasks + delta)
             self.metrics.max_running_tasks = max(self.metrics.max_running_tasks, self.metrics.running_tasks)
             self.metrics.last_updated = get_current_time_ms()
-            TASK_PROCESSING.set(self.metrics.running_tasks)
+            metrics.track_task('processing', value=self.metrics.running_tasks)
 
     async def _update_completion_metrics(self, success: bool, duration_ms: int) -> None:
         async with self._metrics_lock:
@@ -186,20 +190,20 @@ class QueueWorkerPool:
             estimated_qsize_after_put = current_qsize + 1
             self.metrics.current_queue_size = estimated_qsize_after_put
             self.metrics.max_observed_queue_size = max(self.metrics.max_observed_queue_size, estimated_qsize_after_put)
-            TASK_QUEUE_DEPTH.set(estimated_qsize_after_put)
+            metrics.track_task('queue_depth', value=estimated_qsize_after_put)
         try:
             await self._work_queue.put((func, args, kwargs))
             logger.debug(f'Submitted task {getattr(func, '__name__', 'unknown')} to pool {self.name}')
         except asyncio.QueueFull:
             async with self._metrics_lock:
                 self.metrics.tasks_failed += 1
-                TASK_QUEUE_DEPTH.set(self._work_queue.qsize())
+                metrics.track_task('queue_depth', value=self._work_queue.qsize()) # 에러 발생 시
             logger.error(f'Worker pool {self.name} queue is full. Task submission failed.')
             raise WorkerPoolError(f'Worker pool {self.name} queue is full')
         except Exception as e:
             async with self._metrics_lock:
                 self.metrics.tasks_failed += 1
-                TASK_QUEUE_DEPTH.set(self._work_queue.qsize())
+                metrics.track_task('queue_depth', value=self._work_queue.qsize()) # 에러 발생 시
             logger.error(f'Failed to submit task to pool {self.name}: {e}')
             raise WorkerPoolError(f'Failed to submit task: {e}', original_error=e)
 

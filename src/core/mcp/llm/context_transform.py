@@ -2,7 +2,9 @@ from typing import Any, Dict, List, Union, Optional, Type
 from src.llm.base import BaseLLMAdapter
 from src.llm.adapters.openai import OpenAIAdapter
 from src.llm.adapters.anthropic import AnthropicAdapter
+from src.llm.adapters.gemini import GeminiAdapter
 from src.config.logger import get_logger
+
 logger = get_logger(__name__)
 SUPPORTED_INPUT_TYPES = Union[str, List[Dict[str, str]]]
 
@@ -14,6 +16,8 @@ async def transform_llm_input_for_model(original_input: SUPPORTED_INPUT_TYPES, t
     if isinstance(target_adapter, OpenAIAdapter) and ('turbo' in target_model_name or target_model_name.startswith('gpt-4')):
         expects_messages_list = True
     elif isinstance(target_adapter, AnthropicAdapter):
+        expects_messages_list = True
+    elif isinstance(target_adapter, GeminiAdapter):
         expects_messages_list = True
     transformed_input = original_input
     if expects_messages_list:

@@ -5,7 +5,9 @@ from src.core.queue_worker_pool import QueueWorkerPool, QueueWorkerPoolConfig, Q
 from src.core.worker_pool import get_worker_pool, WorkerPoolType, AnyWorkerPool, WorkerPoolConfig
 from src.config.logger import get_logger
 from src.config.settings import get_settings
-from src.config.metrics import TASK_QUEUE_DEPTH, TASK_PROCESSING, track_worker_scaling
+from src.config.metrics import get_metrics_manager
+
+metrics = get_metrics_manager()
 logger = get_logger(__name__)
 settings = get_settings()
 
@@ -39,7 +41,7 @@ class WorkerManager:
                 if hasattr(self.worker_pool, 'metrics') and isinstance(self.worker_pool.metrics, QueueWorkerPoolMetrics):
                     metrics = self.worker_pool.metrics
                     active_workers = metrics.active_workers
-                    TASK_PROCESSING.set(active_workers)
+                    metrics.track_task('processing', value=metrics.running_tasks) # running_tasks 로 값 설정
                 else:
                     logger.warning(f"Worker pool '{self.worker_pool.name}' does not have compatible 'metrics' attribute (QueueWorkerPoolMetrics). Cannot get active workers.")
                 if hasattr(self.worker_pool, 'config') and isinstance(self.worker_pool.config, QueueWorkerPoolConfig):
@@ -49,7 +51,7 @@ class WorkerManager:
                     current_max_workers_in_pool = self.max_workers
                 if hasattr(self.worker_pool, 'get_queue_size') and callable(self.worker_pool.get_queue_size):
                     queue_size = self.worker_pool.get_queue_size()
-                    TASK_QUEUE_DEPTH.set(queue_size)
+                    metrics.track_task('queue_depth', value=queue_size)
                 else:
                     logger.warning(f"Worker pool '{self.worker_pool.name}' does not have 'get_queue_size' method. Cannot get accurate queue depth.")
                 log_status: str = f"Worker Pool Status ('{self.worker_pool.name}'): Active Workers={active_workers}/{current_max_workers_in_pool} (Manager Max: {self.max_workers}), Queue Depth={queue_size}"
@@ -79,7 +81,7 @@ class WorkerManager:
             new_worker_count: int = min(self.max_workers, current_max_workers_in_pool + 1)
             log_msg: str = f"[SCALING] Recommendation: Scale Up for pool '{self.worker_pool.name}'. Queue depth ({queue_size}) > threshold ({scale_up_threshold:.1f}) and pool is busy ({active_workers}/{current_max_workers_in_pool}). Target workers: {new_worker_count}"
             logger.info(log_msg)
-            track_worker_scaling(action='scale_up', pool_name=self.worker_pool.name)
+            metrics.track_worker_scaling(action='scale_up', pool_name=self.worker_pool.name)
             return
         utilization = active_workers / current_max_workers_in_pool if current_max_workers_in_pool > 0 else 0
         should_scale_down = queue_size == 0 and current_max_workers_in_pool > self.min_workers and (utilization < self.scale_down_idle_threshold)
@@ -88,7 +90,7 @@ class WorkerManager:
             if new_worker_count < current_max_workers_in_pool:
                 log_msg: str = f"[SCALING] Recommendation: Scale Down for pool '{self.worker_pool.name}'. Queue empty and low utilization ({utilization:.2f} < {self.scale_down_idle_threshold:.2f}). Target workers: {new_worker_count}"
                 logger.info(log_msg)
-                track_worker_scaling(action='scale_down', pool_name=self.worker_pool.name)
+                metrics.track_worker_scaling(action='scale_down', pool_name=self.worker_pool.name)
         else:
             logger.debug(f"No scaling action needed for pool '{self.worker_pool.name}'. Queue={queue_size}, Active={active_workers}/{current_max_workers_in_pool}, UpCond=({queue_size > scale_up_threshold}, {active_workers >= current_max_workers_in_pool}, {current_max_workers_in_pool < self.max_workers}), DownCond=({queue_size == 0}, {current_max_workers_in_pool > self.min_workers}, {utilization < self.scale_down_idle_threshold})")
 

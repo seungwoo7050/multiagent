@@ -1,5 +1,5 @@
 import time
-from typing import Any, Dict, Optional, Type, cast, List, Tuple
+from typing import Any, Dict, Optional, Type, cast, List, Tuple, Union
 from src.core.mcp.protocol import ContextProtocol
 from src.core.mcp.adapter_base import MCPAdapterBase
 from src.core.mcp.schema import BaseContextSchema
@@ -123,6 +123,71 @@ class LLMAdapter(MCPAdapterBase):
         except Exception as e:
             logger.error(f'Error adapting LLM output dict to LLMOutputContext: {e}', exc_info=True)
             raise SerializationError(f'Could not adapt LLM output to MCP context: {e}', original_error=e)
+        
+    def _track_llm_metrics(self, model: str, result_data: Dict[str, Any], 
+                     duration: float, context_labels: Dict[str, str],
+                     should_track_metrics: bool = True) -> None:
+        """Track metrics for successful LLM request."""
+        if not should_track_metrics or not model:
+            return
+            
+        provider = settings.LLM_MODEL_PROVIDER_MAP.get(model, 'unknown')
+        usage = result_data.get('usage', {})
+        prompt_tokens = usage.get('prompt_tokens', 0)
+        completion_tokens = usage.get('completion_tokens', 0)
+        
+        # Track successful request count
+        metrics.track_llm('requests', model=model, provider=provider, **context_labels)
+        # Track request duration
+        metrics.track_llm('duration', value=duration, model=model, provider=provider, **context_labels)
+        # Track token usage (prompt)
+        if prompt_tokens > 0:
+            metrics.track_llm('tokens', value=prompt_tokens, model=model, 
+                            provider=provider, type='prompt', **context_labels)
+        # Track token usage (completion)
+        if completion_tokens > 0:
+            metrics.track_llm('tokens', value=completion_tokens, model=model, 
+                            provider=provider, type='completion', **context_labels)
+
+    def _track_llm_error(self, model: str, error_code: Union[ErrorCode, str], 
+                    context_labels: Dict[str, str],
+                    should_track_metrics: bool = True) -> None:
+        """Track metrics for failed LLM request."""
+        if not should_track_metrics:
+            return
+            
+        provider = settings.LLM_MODEL_PROVIDER_MAP.get(model, 'unknown')
+        error_type = error_code.value if isinstance(error_code, ErrorCode) else str(error_code)
+        metrics.track_llm('errors', model=model, provider=provider, 
+                        error_type=error_type, **context_labels)
+
+    async def _select_models(self, requested_model: str) -> Tuple[str, List[str]]:
+        """Select primary and fallback models to use."""
+        return await select_models(
+            requested_model=requested_model,
+            task_context=None
+        )
+
+    async def _execute_llm_request(
+        self, 
+        primary_model: str, 
+        fallback_models: List[str],
+        call_args: Dict[str, Any]
+    ) -> Tuple[str, Dict[str, Any]]:
+        """Execute LLM request with fallbacks."""
+        logger.debug(f"Executing LLM call via execute_with_fallbacks (Primary: '{primary_model}', Fallbacks: {fallback_models})")
+        
+        return await execute_with_fallbacks(
+            primary_model=primary_model,
+            fallback_models=fallback_models,
+            prompt=call_args['prompt'],
+            max_tokens=call_args.get('max_tokens'),
+            temperature=call_args.get('temperature'),
+            top_p=call_args.get('top_p'),
+            additional_params=call_args.get('additional_params'),
+            timeout=call_args.get('timeout'),
+            track_metrics=call_args.get('track_metrics', True)
+        )    
 
     async def process_with_mcp(self, context: ContextProtocol, **kwargs: Any) -> ContextProtocol:
         llm_result_data: Optional[Dict[str, Any]] = None
@@ -133,85 +198,65 @@ class LLMAdapter(MCPAdapterBase):
         context_labels = get_context_labels(context) # Get context labels early
 
         try:
+            # Validate input context
             if not isinstance(context, LLMInputContext):
                 raise ValueError(f'Expected LLMInputContext, got {type(context).__name__}')
             llm_input_context: LLMInputContext = cast(LLMInputContext, context)
 
+            # Select model(s)
             requested_model = llm_input_context.model
-            primary_model_selected, fallback_models_selected = await select_models(
-                requested_model=requested_model,
-                task_context=None # Consider passing relevant context if available/needed for selection
-            )
+            primary_model_selected, fallback_models_selected = await self._select_models(requested_model)
             logger.info(f'Selected models - Primary: {primary_model_selected}, Fallbacks: {fallback_models_selected}')
 
+            # Prepare execution
             common_call_args = await self.adapt_input(context, **kwargs)
-            # Remove adapter/selector specific keys before passing to execute_with_fallbacks
+            should_track_metrics = common_call_args.pop('track_metrics', True)
             common_call_args.pop('primary_model', None)
             common_call_args.pop('fallback_models', None)
-            should_track_metrics = common_call_args.pop('track_metrics', True) # Extract and remove track_metrics flag
 
-            logger.debug(f"Executing LLM call via execute_with_fallbacks (Primary: '{primary_model_selected}', Fallbacks: {fallback_models_selected})")
-
-            model_actually_used, llm_result_data = await execute_with_fallbacks(
-                primary_model=primary_model_selected,
-                fallback_models=fallback_models_selected,
-                prompt=common_call_args['prompt'], # Assuming prompt/messages are here
-                max_tokens=common_call_args.get('max_tokens'),
-                temperature=common_call_args.get('temperature'),
-                top_p=common_call_args.get('top_p'),
-                additional_params=common_call_args.get('additional_params'),
-                timeout=common_call_args.get('timeout'),
-                track_metrics=should_track_metrics # Pass the flag down if needed by execute_with_fallbacks internally
+            # Execute with fallbacks
+            model_actually_used, llm_result_data = await self._execute_llm_request(
+                primary_model_selected,
+                fallback_models_selected,
+                common_call_args
             )
 
+            # Track metrics for successful execution
             duration = time.time() - start_time
-            provider = settings.LLM_MODEL_PROVIDER_MAP.get(model_actually_used, 'unknown')
-
-            if should_track_metrics and model_actually_used and llm_result_data:
-                usage = llm_result_data.get('usage', {})
-                prompt_tokens = usage.get('prompt_tokens', 0)
-                completion_tokens = usage.get('completion_tokens', 0)
-
-                # Track successful request count
-                metrics.track_llm('requests', model=model_actually_used, provider=provider, **context_labels)
-                # Track request duration
-                metrics.track_llm('duration', value=duration, model=model_actually_used, provider=provider, **context_labels)
-                # Track token usage (prompt)
-                if prompt_tokens > 0:
-                    metrics.track_llm('tokens', value=prompt_tokens, model=model_actually_used, provider=provider, type='prompt', **context_labels)
-                # Track token usage (completion)
-                if completion_tokens > 0:
-                    metrics.track_llm('tokens', value=completion_tokens, model=model_actually_used, provider=provider, type='completion', **context_labels)
+            if llm_result_data:
+                self._track_llm_metrics(
+                    model_actually_used, 
+                    llm_result_data, 
+                    duration, 
+                    context_labels,
+                    should_track_metrics
+                )
 
             logger.info(f'LLM call completed using model: {model_actually_used}')
 
         except LLMError as lle:
-            duration = time.time() - start_time # Recalculate duration up to the error point
+            # Handle LLM-specific errors
+            duration = time.time() - start_time
             logger.error(f'All LLM models failed during execution: {lle.message}', extra=lle.to_dict())
             component_error = lle
-            # Use the model from the error if available, otherwise the primary selected one
             model_actually_used = lle.model or primary_model_selected
-            provider = settings.LLM_MODEL_PROVIDER_MAP.get(model_actually_used, 'unknown')
-            error_type = lle.code.value if isinstance(lle.code, ErrorCode) else str(lle.code)
-
-            # Track error
-            # Assuming track_metrics flag was intended for success/error tracking as well
-            # If 'should_track_metrics' variable wasn't extracted before error, use context metadata directly
+            
+            # Track error metrics
             should_track_metrics_on_error = llm_input_context.metadata.get('track_metrics', True) if 'llm_input_context' in locals() else True
             if should_track_metrics_on_error:
-                 metrics.track_llm('errors', model=model_actually_used, provider=provider, error_type=error_type, **context_labels)
+                self._track_llm_error(model_actually_used, lle.code or ErrorCode.UNKNOWN_ERROR, context_labels)
 
         except Exception as e:
-            duration = time.time() - start_time # Recalculate duration up to the error point
-            logger.error(f'Error during MCP processing for LLM before/during execute_with_fallbacks: {e}', exc_info=True)
+            # Handle unexpected errors
+            duration = time.time() - start_time
+            logger.error(f'Error during MCP processing for LLM: {e}', exc_info=True)
             component_error = e
-            model_actually_used = primary_model_selected # Best guess for model at this stage
-            provider = settings.LLM_MODEL_PROVIDER_MAP.get(model_actually_used, 'unknown')
-
+            model_actually_used = primary_model_selected
+            
             # Track unknown error
             should_track_metrics_on_error = llm_input_context.metadata.get('track_metrics', True) if 'llm_input_context' in locals() else True
             if should_track_metrics_on_error:
-                metrics.track_llm('errors', model=model_actually_used, provider=provider, error_type=ErrorCode.UNKNOWN_ERROR.value, **context_labels)
+                self._track_llm_error(model_actually_used, ErrorCode.UNKNOWN_ERROR, context_labels)
 
         # Adapt output regardless of success or failure
         output_context: LLMOutputContext = await self.adapt_output(

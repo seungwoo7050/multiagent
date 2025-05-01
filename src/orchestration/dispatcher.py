@@ -11,15 +11,17 @@ from src.orchestration.flow_control import RedisRateLimiter, get_flow_controller
 from src.core.task import BaseTask, TaskFactory, TaskState, TaskPriority
 from src.config.logger import get_logger, get_logger_with_context, ContextLoggerAdapter
 from src.config.settings import get_settings
-from src.config.metrics import track_task_started, track_task_completed, track_task_consumed, track_task_rejection, track_task_retry, track_task_dlq, TASK_QUEUE_DEPTH, TASK_PROCESSING
+from src.config.metrics import get_metrics_manager
 from src.config.errors import BaseError, ErrorCode, TaskError, convert_exception, RETRYABLE_ERRORS
 from src.agents.factory import get_agent_factory
 from src.core.agent import AgentContext, AgentResult, BaseAgent
 from src.core.exceptions import AgentExecutionError, AgentNotFoundError, TaskExecutionError, DispatcherError, AgentCreationError
 from src.llm.retry import is_retryable_error, calculate_backoff
 from src.memory.utils import AsyncLock
+
 logger: ContextLoggerAdapter = get_logger_with_context(__name__)
 settings = get_settings()
+metrics = get_metrics_manager()
 
 class Dispatcher:
 
@@ -55,7 +57,7 @@ class Dispatcher:
         trace_id = task_data.get('trace_id')
         context_logger = get_logger_with_context(__name__, task_id=task_id, original_message_id=original_message_id, trace_id=trace_id, dispatcher_id=self.dispatcher_id)
         context_logger.info('Starting processing task...')
-        track_task_started()
+        metrics.track_task('processing', increment=True)
         start_time = time.monotonic()
         agent_result = None
         task = None
@@ -114,7 +116,7 @@ class Dispatcher:
                         task_data['metadata']['retry_count'] = current_retry
                         delay = calculate_backoff(current_retry - 1, base_delay=0.5, max_delay=5.0, jitter=True)
                         context_logger.warning(f'Retryable error. Re-scheduling attempt {current_retry}/{max_retries} after {delay:.2f}s delay. Error: {error.message}')
-                        track_task_retry(task_type=task_type_str)
+                        metrics.track_task('retries', task_type=task_type_str)
                         await asyncio.sleep(delay)
                         if self.uses_redis_streams:
                             new_message_id = await self.task_queue.produce(task_data)
@@ -132,7 +134,7 @@ class Dispatcher:
                         context_logger.error(f'Task {task_id} failed ({dlq_reason}). Moving original message {original_message_id} to DLQ.')
                         if hasattr(error, 'message') and isinstance(error.message, str):
                             error.message += f' ({dlq_reason})'
-                        track_task_dlq(reason=dlq_reason)
+                        metrics.track_task('dlq', reason=dlq_reason)
                         await self._move_to_dlq(original_message_id, task_data, error)
             except asyncio.TimeoutError:
                 context_logger.warning(f"Could not acquire lock '{lock_name}' for error handling task {original_message_id} within timeout. Assuming already handled or will be claimed later.")
@@ -142,7 +144,9 @@ class Dispatcher:
             end_time = time.monotonic()
             duration = end_time - start_time
             status = 'completed' if agent_result and agent_result.success else 'failed'
-            track_task_completed(status, duration)
+            metrics.track_task('completed', status=status)
+            metrics.track_task('duration', status=status, value=duration)
+            metrics.track_task('processing', increment=False)
             context_logger.info(f"Task processing finished with status '{status}' in {duration:.4f}s")
 
     async def _move_to_dlq(self, message_id: str, task_data: Dict[str, Any], error: BaseError) -> None:
@@ -171,7 +175,7 @@ class Dispatcher:
                     consume_count = len(tasks)
                     consumer_logger.info(f'Consumed {consume_count} tasks from queue.')
                     for msg_id, task_data in tasks:
-                        track_task_consumed(dispatcher_id=self.dispatcher_id)
+                        metrics.track_task('consumed', dispatcher_id=self.dispatcher_id)
                         task_data.setdefault('metadata', {})
                         task_data['metadata']['original_message_id'] = msg_id
                         await self.scheduler.add_task(task_data)
@@ -236,7 +240,7 @@ class Dispatcher:
                     proc_context_logger.debug('Submitted task processing to worker pool.')
                     acquired_semaphore = False
                 else:
-                    track_task_rejection(reason='flow_control')
+                    metrics.track_task('rejections', reason='flow_control')
                     proc_context_logger.warning('Flow control rejected task. Re-scheduling.')
                     if acquired_semaphore:
                         self._processing_semaphore.release()
@@ -280,7 +284,7 @@ class Dispatcher:
                     consume_count = len(consumed_tasks)
                     dispatch_logger.info(f'Consumed {consume_count} tasks from queue.')
                     for original_message_id, task_data in consumed_tasks:
-                        track_task_consumed(dispatcher_id=self.dispatcher_id)
+                        metrics.track_task('consumed', dispatcher_id=self.dispatcher_id)
                         task_id = task_data.get('id', original_message_id)
                         dispatch_context_logger = get_logger_with_context(__name__, task_id=task_id, original_message_id=original_message_id, dispatcher_id=self.dispatcher_id, loop='dispatch')
                         acquired_semaphore = False
@@ -314,7 +318,7 @@ class Dispatcher:
                                 dispatch_context_logger.debug('Submitted task processing to worker pool.')
                                 acquired_semaphore = False
                             else:
-                                track_task_rejection(reason='flow_control')
+                                metrics.track_task('rejections', reason='flow_control')
                                 dispatch_context_logger.warning(f'Flow control rejected task {task_id}. Message will likely be re-consumed later or claimed.')
                                 if acquired_semaphore:
                                     self._processing_semaphore.release()

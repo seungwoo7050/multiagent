@@ -1,11 +1,15 @@
-from typing import Any, Dict, Optional, Type, List, cast
+from typing import Any, Dict, Optional, Type, List, Union, Callable, Coroutine, TypeVar, cast, Tuple
 from src.core.mcp.protocol import ContextProtocol
 from src.core.mcp.adapter_base import MCPAdapterBase
 from src.core.mcp.schema import BaseContextSchema
 from src.memory.base import BaseMemory
 from src.memory.manager import MemoryManager
 from src.config.logger import get_logger
-from src.core.exceptions import SerializationError, MemoryError
+from src.config.errors import MemoryError
+from src.core.exceptions import SerializationError
+
+
+
 logger = get_logger(__name__)
 
 class MemoryInputContext(BaseContextSchema):
@@ -29,66 +33,159 @@ class MemoryAdapter(MCPAdapterBase):
         if not isinstance(target_component, (BaseMemory, MemoryManager)):
             raise TypeError(f'target_component must be an instance of BaseMemory or MemoryManager, got {type(target_component).__name__}')
         super().__init__(target_component=target_component, mcp_context_type=MemoryInputContext)
+        
+        # Operation handler mapping
+        self._operation_handlers = {
+            'load': self._adapt_load_operation,
+            'save': self._adapt_save_operation,
+            'delete': self._adapt_delete_operation,
+            'clear': self._adapt_clear_operation,
+            'search_vectors': self._adapt_search_vectors_operation,
+            'store_vector': self._adapt_store_vector_operation,
+            'exists': self._adapt_exists_operation,
+            'list_keys': self._adapt_list_keys_operation,
+        }
+        
+    async def _adapt_load_operation(self, context: MemoryInputContext) -> Tuple[Dict[str, Any], str]:
+        """Adapt input for load operation."""
+        if not context.key:
+            raise ValueError("Missing 'key' for load operation")
+        
+        args_dict = {
+            'key': context.key, 
+            'context_id': context.context_id, 
+            'default': context.metadata.get('default'), 
+            'use_cache': context.metadata.get('use_cache', True)
+        }
+        
+        return args_dict, 'load'
+
+    async def _adapt_save_operation(self, context: MemoryInputContext) -> Tuple[Dict[str, Any], str]:
+        """Adapt input for save operation."""
+        if not context.key:
+            raise ValueError("Missing 'key' for save operation")
+        if context.data is None:
+            raise ValueError("Missing 'data' for save operation")
+        
+        args_dict = {
+            'key': context.key, 
+            'context_id': context.context_id, 
+            'data': context.data, 
+            'ttl': context.ttl, 
+            'update_cache': context.metadata.get('update_cache', True)
+        }
+        
+        return args_dict, 'save'
+
+    async def _adapt_delete_operation(self, context: MemoryInputContext) -> Tuple[Dict[str, Any], str]:
+        """Adapt input for delete operation."""
+        if not context.key:
+            raise ValueError("Missing 'key' for delete operation")
+        
+        args_dict = {
+            'key': context.key, 
+            'context_id': context.context_id, 
+            'clear_cache': context.metadata.get('clear_cache', True)
+        }
+        
+        return args_dict, 'delete'
+
+    async def _adapt_clear_operation(self, context: MemoryInputContext) -> Tuple[Dict[str, Any], str]:
+        """Adapt input for clear operation."""
+        args_dict = {
+            'context_id': context.context_id, 
+            'clear_cache': context.metadata.get('clear_cache', True), 
+            'clear_vectors': context.metadata.get('clear_vectors', True)
+        }
+        
+        return args_dict, 'clear'
+
+    async def _adapt_search_vectors_operation(self, context: MemoryInputContext) -> Tuple[Dict[str, Any], str]:
+        """Adapt input for search_vectors operation."""
+        if not isinstance(self.target_component, MemoryManager) or not self.target_component.vector_store:
+            raise ValueError('Vector store operation requires a configured vector store in MemoryManager')
+        if not context.query:
+            raise ValueError("Missing 'query' for search_vectors operation")
+        
+        args_dict = {
+            'query': context.query, 
+            'k': context.k or 5, 
+            'context_id': context.context_id, 
+            'filter_metadata': context.filter_metadata
+        }
+        
+        return args_dict, 'search_vectors'
+
+    async def _adapt_store_vector_operation(self, context: MemoryInputContext) -> Tuple[Dict[str, Any], str]:
+        """Adapt input for store_vector operation."""
+        if not isinstance(self.target_component, MemoryManager) or not self.target_component.vector_store:
+            raise ValueError('Vector store operation requires a configured vector store in MemoryManager')
+        if context.data is None or not isinstance(context.data, str):
+            raise ValueError("Missing or invalid 'data' (text) for store_vector operation")
+        
+        args_dict = {
+            'text': context.data, 
+            'metadata': context.metadata or {}, 
+            'context_id': context.context_id
+        }
+        
+        return args_dict, 'store_vector'
+
+    async def _adapt_exists_operation(self, context: MemoryInputContext) -> Tuple[Dict[str, Any], str]:
+        """Adapt input for exists operation."""
+        if not context.key:
+            raise ValueError("Missing 'key' for exists operation")
+        
+        args_dict = {
+            'key': context.key, 
+            'context_id': context.context_id, 
+            'check_cache': context.metadata.get('check_cache', True)
+        }
+        
+        return args_dict, 'exists'
+
+    async def _adapt_list_keys_operation(self, context: MemoryInputContext) -> Tuple[Dict[str, Any], str]:
+        """Adapt input for list_keys operation."""
+        args_dict = {
+            'context_id': context.context_id, 
+            'pattern': context.metadata.get('pattern')
+        }
+        
+        return args_dict, 'list_keys'    
 
     async def adapt_input(self, context: ContextProtocol, **kwargs: Any) -> Dict[str, Any]:
         if not isinstance(context, MemoryInputContext):
             raise ValueError(f'Incompatible context type: Expected MemoryInputContext, got {type(context).__name__}')
+        
         mem_input_context: MemoryInputContext = cast(MemoryInputContext, context)
         operation = mem_input_context.operation
+        
         logger.debug(f'Adapting MemoryInputContext (ID: {mem_input_context.context_id}, Op: {operation}) for BaseMemory/MemoryManager call')
-        args_dict: Dict[str, Any] = {}
-        target_method_name: str = ''
+        
         try:
-            if operation == 'load':
-                if not mem_input_context.key:
-                    raise ValueError("Missing 'key' for load operation")
-                target_method_name = 'load'
-                args_dict = {'key': mem_input_context.key, 'context_id': mem_input_context.context_id, 'default': mem_input_context.metadata.get('default'), 'use_cache': mem_input_context.metadata.get('use_cache', True)}
-            elif operation == 'save':
-                if not mem_input_context.key:
-                    raise ValueError("Missing 'key' for save operation")
-                if mem_input_context.data is None:
-                    raise ValueError("Missing 'data' for save operation")
-                target_method_name = 'save'
-                args_dict = {'key': mem_input_context.key, 'context_id': mem_input_context.context_id, 'data': mem_input_context.data, 'ttl': mem_input_context.ttl, 'update_cache': mem_input_context.metadata.get('update_cache', True)}
-            elif operation == 'delete':
-                if not mem_input_context.key:
-                    raise ValueError("Missing 'key' for delete operation")
-                target_method_name = 'delete'
-                args_dict = {'key': mem_input_context.key, 'context_id': mem_input_context.context_id, 'clear_cache': mem_input_context.metadata.get('clear_cache', True)}
-            elif operation == 'clear':
-                target_method_name = 'clear'
-                args_dict = {'context_id': mem_input_context.context_id, 'clear_cache': mem_input_context.metadata.get('clear_cache', True), 'clear_vectors': mem_input_context.metadata.get('clear_vectors', True)}
-            elif operation == 'search_vectors':
-                if not isinstance(self.target_component, MemoryManager) or not self.target_component.vector_store:
-                    raise ValueError('Vector store operation requires a configured vector store in MemoryManager')
-                if not mem_input_context.query:
-                    raise ValueError("Missing 'query' for search_vectors operation")
-                target_method_name = 'search_vectors'
-                args_dict = {'query': mem_input_context.query, 'k': mem_input_context.k or 5, 'context_id': mem_input_context.context_id, 'filter_metadata': mem_input_context.filter_metadata}
-            elif operation == 'store_vector':
-                if not isinstance(self.target_component, MemoryManager) or not self.target_component.vector_store:
-                    raise ValueError('Vector store operation requires a configured vector store in MemoryManager')
-                if mem_input_context.data is None or not isinstance(mem_input_context.data, str):
-                    raise ValueError("Missing or invalid 'data' (text) for store_vector operation")
-                target_method_name = 'store_vector'
-                args_dict = {'text': mem_input_context.data, 'metadata': mem_input_context.metadata or {}, 'context_id': mem_input_context.context_id}
-            elif operation == 'exists':
-                if not mem_input_context.key:
-                    raise ValueError("Missing 'key' for exists operation")
-                target_method_name = 'exists'
-                args_dict = {'key': mem_input_context.key, 'context_id': mem_input_context.context_id, 'check_cache': mem_input_context.metadata.get('check_cache', True)}
-            elif operation == 'list_keys':
-                target_method_name = 'list_keys'
-                args_dict = {'context_id': mem_input_context.context_id, 'pattern': mem_input_context.metadata.get('pattern')}
-            else:
+            # Get the appropriate handler for this operation
+            handler = self._operation_handlers.get(operation)
+            if not handler:
                 raise ValueError(f'Unsupported memory operation specified in context: {operation}')
+            
+            # Execute the handler to get operation details
+            args_dict, target_method_name = await handler(mem_input_context)
+            
+            # Validate target method exists
             if not hasattr(self.target_component, target_method_name):
-                raise NotImplementedError(f"Target component {type(self.target_component).__name__} does not implement the required method '{target_method_name}' for operation '{operation}'")
+                raise NotImplementedError(
+                    f"Target component {type(self.target_component).__name__} does not implement "
+                    f"the required method '{target_method_name}' for operation '{operation}'"
+                )
+            
             return {'operation': target_method_name, 'args': args_dict}
+        
         except Exception as e:
             logger.error(f'Error adapting MemoryInputContext for operation {operation}: {e}', exc_info=True)
-            raise SerializationError(f'Could not adapt input context for memory operation {operation}: {e}', original_error=e)
+            raise SerializationError(
+                f'Could not adapt input context for memory operation {operation}: {e}', 
+                original_error=e
+            )
 
     async def adapt_output(self, component_output: Any, original_context: Optional[ContextProtocol]=None, **kwargs: Any) -> MemoryOutputContext:
         operation = kwargs.get('operation', 'unknown')

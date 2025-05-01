@@ -1,12 +1,10 @@
 .
-├── auto_pip.sh
-├── clean.sh
 ├── pytest.ini
 ├── requirements.txt
-├── run_pytest.sh
 ├── src
 │   ├── __init__.py
 │   ├── agents
+│   │   ├── README.md
 │   │   ├── config.py
 │   │   ├── context_manager.py
 │   │   ├── factory.py
@@ -25,6 +23,7 @@
 │   │   │   └── task.py
 │   │   └── streaming.py
 │   ├── config
+│   │   ├── README.md
 │   │   ├── __init__.py
 │   │   ├── connections.py
 │   │   ├── errors.py
@@ -32,10 +31,12 @@
 │   │   ├── metrics.py
 │   │   └── settings.py
 │   ├── core
+│   │   ├── README.md
 │   │   ├── agent.py
 │   │   ├── circuit_breaker.py
 │   │   ├── exceptions.py
 │   │   ├── mcp
+│   │   │   ├── README.md
 │   │   │   ├── adapter_base.py
 │   │   │   ├── adapters
 │   │   │   │   ├── __init__.py
@@ -53,6 +54,7 @@
 │   │   │   │   └── websocket_adapter.py
 │   │   │   ├── compression.py
 │   │   │   ├── llm
+│   │   │   │   ├── README.md
 │   │   │   │   ├── context_model_selector.py
 │   │   │   │   ├── context_performance.py
 │   │   │   │   ├── context_preserving_fallback.py
@@ -70,6 +72,7 @@
 │   │   ├── task.py
 │   │   └── worker_pool.py
 │   ├── llm
+│   │   ├── README.md
 │   │   ├── __init__.py
 │   │   ├── adapters
 │   │   │   ├── __init__.py
@@ -91,6 +94,13 @@
 │   │   └── tokenizer.py
 │   ├── main.py
 │   ├── memory
+│   │   ├── README.md
+│   │   ├── __init__.py
+│   │   ├── backends
+│   │   │   ├── __init__.py
+│   │   │   ├── chroma.py
+│   │   │   ├── faiss.py
+│   │   │   └── qdrant.py
 │   │   ├── base.py
 │   │   ├── manager.py
 │   │   ├── redis_memory.py
@@ -107,8 +117,10 @@
 │   │   ├── worker_manager.py
 │   │   └── workflow.py
 │   ├── prompts
+│   │   ├── README.md
 │   │   └── templates.py
 │   ├── tools
+│   │   ├── README.md
 │   │   ├── base.py
 │   │   ├── calculator.py
 │   │   ├── datetime_tool.py
@@ -117,18 +129,34 @@
 │   │   ├── web_search.py
 │   │   └── web_search_google.py
 │   └── utils
+│       ├── README.md
 │       ├── ids.py
 │       ├── serialization.py
 │       └── timing.py
 ├── structure.txt
 └── tests
-    └── config
-        ├── test_config_integration.py
-        ├── test_connections.py
-        ├── test_connections_load.py
-        ├── test_errors.py
-        ├── test_logger.py
-        ├── test_metrics.py
-        └── test_settings.py
+    ├── agents
+    │   └── test_agents.py
+    ├── config
+    │   └── test_config.py
+    ├── core
+    │   ├── mcp
+    │   │   └── test_llm.py
+    │   ├── test_core.py
+    │   └── test_mcp.py
+    ├── llm
+    │   └── test_llm.py
+    ├── memory
+    │   ├── test_memory.py
+    │   ├── test_memory_lock.py
+    │   ├── test_string_format.py
+    │   └── test_vector_store.py
+    ├── prompts
+    │   └── test_prompts.py
+    ├── tools
+    │   ├── test_tools.py
+    │   └── test_websearch.py
+    └── utils
+        └── test_utils.py
 
-22 directories, 110 files
+31 directories, 129 files

@@ -7,11 +7,15 @@ import redis.asyncio as aioredis
 from pydantic import BaseModel, Field, validator
 from src.config.logger import get_logger
 from src.config.settings import get_settings
-from src.config.connections import get_redis_async_connection
+from src.config.connection import get_connection_manager
 from src.config.errors import ErrorCode, BaseError, convert_exception
-from src.config.metrics import track_task_rejection
+from src.config.metrics import get_metrics_manager
+
+metrics = get_metrics_manager()
 logger = get_logger(__name__)
 settings = get_settings()
+connection_manager = get_connection_manager()
+
 T = TypeVar('T')
 R = TypeVar('R')
 
@@ -67,7 +71,7 @@ class RedisRateLimiter:
     async def _get_redis(self) -> aioredis.Redis:
         if self._redis is None or not self._redis.is_connected:
             try:
-                self._redis = await get_redis_async_connection()
+                self._redis = await connection_manager.get_redis_async_connection()
                 await self._load_lua_script()
             except Exception as e:
                 error: BaseError = convert_exception(e, ErrorCode.REDIS_CONNECTION_ERROR, f'Failed to get Redis connection for Flow Control {self.name}')
@@ -122,7 +126,7 @@ class RedisRateLimiter:
             if not allowed:
                 self.metrics.rejected_requests += 1
                 self.metrics.last_rejection_time = time.time()
-                track_task_rejection(reason='rate_limit')
+                metrics.track_task('rejections', reason='rate_limit')
                 logger.debug(f'Rate limit exceeded for {self.name}. Request rejected.')
                 return False
             else:
@@ -132,7 +136,7 @@ class RedisRateLimiter:
             logger.error(f'Redis error during rate limit check for {self.name}: {e}', exc_info=True)
             self.metrics.rejected_requests += 1
             self.metrics.last_rejection_time = time.time()
-            track_task_rejection(reason='flow_control_error')
+            metrics.track_task('rejections', reason='flow_control_error')
             return False
 
     async def release(self) -> None:

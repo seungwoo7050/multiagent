@@ -5,6 +5,7 @@ from src.core.mcp.schema import BaseContextSchema, TaskContext
 from src.llm.models import list_available_models
 from src.config.logger import get_logger
 from src.config.settings import get_settings
+
 settings = get_settings()
 logger = get_logger(__name__)
 
@@ -12,7 +13,15 @@ class ContextModelSelector:
 
     def __init__(self):
         logger.debug('ContextModelSelector initialized.')
-        self.selection_rules = [{'condition': lambda ctx: isinstance(ctx, TaskContext) and ctx.task_type == 'coding' and (ctx.metadata.get('estimated_tokens', 0) > 50000), 'preferred_model': 'gpt-4-turbo'}, {'condition': lambda ctx: isinstance(ctx, BaseContextSchema) and ctx.metadata.get('low_latency', False), 'preferred_model': 'claude-3-haiku'}, {'condition': lambda ctx: isinstance(ctx, TaskContext) and ctx.input_data and ('image analysis' in ctx.input_data.get('goal', '').lower()), 'preferred_model': 'gpt-4o'}]
+        self.selection_rules = self._load_selection_rules()
+
+    def _load_selection_rules(self):
+        # Try to load from settings first
+        custom_rules = getattr(settings, 'CONTEXT_MODEL_SELECTION_RULES', None)
+        if custom_rules:
+            logger.info('Loading custom model selection rules from settings')
+            return custom_rules
+        return [{'condition': lambda ctx: isinstance(ctx, TaskContext) and ctx.task_type == 'coding' and (ctx.metadata.get('estimated_tokens', 0) > 50000), 'preferred_model': 'gpt-4-turbo'}, {'condition': lambda ctx: isinstance(ctx, BaseContextSchema) and ctx.metadata.get('low_latency', False), 'preferred_model': 'claude-3-haiku'}, {'condition': lambda ctx: isinstance(ctx, TaskContext) and ctx.input_data and ('image analysis' in ctx.input_data.get('goal', '').lower()), 'preferred_model': 'gpt-4o'}]
 
     async def select_model(self, context: ContextProtocol, available_models: Optional[List[str]]=None) -> str:
         context_type = type(context).__name__

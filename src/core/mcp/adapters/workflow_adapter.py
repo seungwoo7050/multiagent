@@ -6,6 +6,7 @@ from src.core.mcp.schema import BaseContextSchema
 from src.orchestration.workflow import WorkflowEngine, WorkflowState, WorkflowStep, StepState
 from src.config.logger import get_logger
 from src.core.exceptions import SerializationError
+
 logger = get_logger(__name__)
 
 class WorkflowStepInputContext(BaseContextSchema):
@@ -114,4 +115,3 @@ class WorkflowAdapter(MCPAdapterBase):
             error_occurred = e
         output_context = await self.adapt_output(component_output=error_occurred if error_occurred else component_output, original_context=context, **kwargs)
         return output_context
-from pydantic import BaseModel, Field, ConfigDict

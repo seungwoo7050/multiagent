@@ -11,9 +11,11 @@ from src.config.logger import get_logger_with_context, ContextLoggerAdapter
 from src.config.settings import get_settings
 from src.core.exceptions import OrchestrationError, AgentNotFoundError, AgentExecutionError, TaskError, ErrorCode
 from src.core.circuit_breaker import get_circuit_breaker, CircuitBreaker, CircuitOpenError
-from src.config.metrics import track_agent_error
+from src.config.metrics import get_metrics_manager
+
 logger: ContextLoggerAdapter = get_logger_with_context(__name__)
 settings = get_settings()
+metrics = get_metrics_manager()
 
 class Orchestrator:
 
@@ -85,7 +87,7 @@ class Orchestrator:
                 return None
         except CircuitOpenError as e:
             logger.warning(f"Circuit breaker for '{planner_agent_name}' is OPEN. Using fallback planning strategy for task {task.id}. Error: {e}")
-            track_agent_error(planner_agent_name, 'CircuitOpenError')
+            metrics.track_agent('errors', agent_type=planner_agent_name, error_type='CircuitOpenError')
             return None
         except AgentNotFoundError as e:
             logger.error(f"Planner Agent '{planner_agent_name}' not found: {e}")
@@ -105,7 +107,7 @@ class Orchestrator:
         try:
             if not await executor_circuit.allow_request():
                 logger.error(f"Circuit breaker for '{executor_agent_name}' is OPEN. Cannot start execution for task {task.id}.")
-                track_agent_error(executor_agent_name, 'CircuitOpenError')
+                metrics.track_agent('errors', agent_type=executor_agent_name, error_type='CircuitOpenError')
                 await self._update_task_status(task.id, TaskState.FAILED, error={'message': f'Executor agent circuit breaker is open.'})
                 return
             logger.info(f'Circuit breaker allows execution. Submitting plan execution task to Executor Agent: {executor_agent_name}')
@@ -131,7 +133,7 @@ class Orchestrator:
                     logger.error(f"Circuit breaker for '{executor_agent_name}' OPEN during execution attempt for task {task_id_local}: {coe}")
                     final_state = TaskState.FAILED
                     final_error = {'message': f'Executor agent circuit breaker is open: {coe}'}
-                    track_agent_error(executor_agent_name, 'CircuitOpenError')
+                    metrics.track_agent('errors', agent_type=executor_agent_name, error_type='CircuitOpenError')
                 except Exception as exec_e:
                     logger.exception(f'Error during Executor Agent execution via CB for task {task_id_local}: {exec_e}')
                     final_state = TaskState.FAILED
@@ -144,7 +146,7 @@ class Orchestrator:
         except CircuitOpenError as e:
             logger.error(f"Circuit breaker for '{executor_agent_name}' is OPEN. Cannot start execution for task {task.id}. Error: {e}")
             await self._update_task_status(task.id, TaskState.FAILED, error={'message': f'Executor agent circuit breaker is open.'})
-            track_agent_error(executor_agent_name, 'CircuitOpenError')
+            metrics.track_agent('errors', agent_type=executor_agent_name, error_type='CircuitOpenError')
         except AgentNotFoundError as e:
             logger.error(f"Executor Agent '{executor_agent_name}' not found: {e}. Task cannot be executed.")
             await self._update_task_status(task.id, TaskState.FAILED, error={'message': f"Executor agent '{executor_agent_name}' not found."})

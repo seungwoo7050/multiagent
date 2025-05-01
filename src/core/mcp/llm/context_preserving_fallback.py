@@ -9,7 +9,7 @@ from src.config.settings import get_settings
 from src.core.mcp.adapters.llm_adapter import LLMAdapter
 from src.core.mcp.llm.context_transform import transform_llm_input_for_model
 from src.core.mcp.protocol import ContextProtocol
-from src.core.mcp.schema import LLMInputContext, LLMOutputContext
+from src.core.mcp.adapters.llm_adapter import LLMInputContext, LLMOutputContext
 from src.llm.adapters import get_adapter as get_llm_adapter_instance
 from src.llm.base import BaseLLMAdapter
 from src.llm.failure_detector import should_fallback_immediately

@@ -7,6 +7,7 @@ from src.orchestration.orchestrator import Orchestrator
 from src.core.task import BaseTask, TaskResult, TaskState
 from src.config.logger import get_logger
 from src.core.exceptions import SerializationError
+
 logger = get_logger(__name__)
 
 class OrchestrationInputContext(BaseContextSchema):
@@ -81,4 +82,3 @@ class OrchestratorAdapter(MCPAdapterBase):
         except Exception as e:
             logger.error(f'Error adapting Orchestrator output for task {task_id}: {e}', exc_info=True)
             return OrchestrationOutputContext(task_id=task_id, success=False, error_message=f'Failed to adapt orchestration output: {str(e)}', context_id=getattr(original_context, 'context_id', None))
-from pydantic import BaseModel, Field, ConfigDict

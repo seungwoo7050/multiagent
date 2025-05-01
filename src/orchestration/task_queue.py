@@ -4,14 +4,16 @@ import time
 import random
 from typing import Any, Dict, List, Optional, Tuple, Union
 import redis.asyncio as aioredis
-from src.config.connections import get_redis_async_connection
+from src.config.connections import get_connection_manager
 from src.config.logger import get_logger
 from src.config.settings import get_settings
 from src.config.errors import MemoryError, ErrorCode, convert_exception, BaseError
 from src.utils.serialization import serialize, deserialize, SerializationFormat
 from src.memory.utils import AsyncLock
+
 logger = get_logger(__name__)
 settings = get_settings()
+connection_manager = get_connection_manager()
 
 class BaseTaskQueue(abc.ABC):
 
@@ -52,7 +54,7 @@ class RedisStreamTaskQueue(BaseTaskQueue):
     async def _get_redis(self) -> aioredis.Redis:
         if self._redis is None:
             try:
-                self._redis = await get_redis_async_connection()
+                self._redis = await connection_manager.get_redis_async_connection()
                 await self._ensure_stream_and_group()
                 logger.info('Redis connection established and stream/group ensured for TaskQueue.')
             except Exception as e:
