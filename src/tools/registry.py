@@ -1,14 +1,18 @@
 import functools
 import inspect
+import threading
 from typing import Any, Callable, Dict, List, Optional, Set, Type, TypeVar, cast, get_type_hints
 from pydantic import BaseModel
 from src.config.errors import ErrorCode, ToolError
 from src.config.logger import get_logger
 from src.config.metrics import get_metrics_manager
 from src.tools.base import BaseTool
+from src.core.registry import Registry
 
 metrics = get_metrics_manager()
 logger = get_logger(__name__)
+_registries: Dict[str, Registry[Any]] = {}
+_registries_lock = threading.RLock()
 
 T = TypeVar('T', bound=Type[BaseTool])
 
@@ -91,7 +95,7 @@ class ToolRegistry:
     def clear_cache(self) -> None:
         cache_size_before = len(self._instance_cache)
         self._instance_cache.clear()
-        CACHE_OPERATIONS_TOTAL.labels(operation_type='tool_cache_clear').inc()
+        metrics.track_cache('operations', operation_type='tool_cache_clear')
         logger.debug(f'Tool instance cache cleared ({cache_size_before} items removed).')
 
     def unregister(self, tool_name: str) -> None:
@@ -101,8 +105,8 @@ class ToolRegistry:
         if tool_name in self._instance_cache:
             del self._instance_cache[tool_name]
             logger.debug(f'Removed cached instance for unregistered tool: {tool_name}')
-        CACHE_OPERATIONS_TOTAL.labels(operation_type='tool_unregistration').inc()
-        CACHE_SIZE.labels(cache_type='tool_registry').set(len(self._tools))
+        metrics.track_registry('operations', registry_name='tool_registry', operation_type='unregistration')
+        metrics.track_registry('size', registry_name='tool_registry', value=len(self._tools))
         logger.info(f"Tool '{tool_name}' unregistered successfully.")
 
     def get_names(self) -> Set[str]:
@@ -118,3 +122,17 @@ def register_tool(registry: Optional[ToolRegistry]=None) -> Callable[[T], T]:
             logger.debug(f"Tool class '{cls.__name__}' marked for registration (decorator used without specific registry). Ensure a global registry processes this later.")
         return cls
     return decorator
+
+def get_registry(name: str = 'default') -> ToolRegistry:
+    """
+    지정된 이름의 ToolRegistry 인스턴스를 가져오거나 생성합니다.
+    이름이 제공되지 않으면 'default' 레지스트리를 사용합니다.
+    """
+    global _registries
+    if name not in _registries:
+        logger.info(f"Creating new ToolRegistry instance named: {name}")
+        _registries[name] = ToolRegistry()
+        # 생성된 레지스트리에 대한 추가 초기화 로직이 필요하면 여기에 추가
+    else:
+        logger.debug(f"Returning existing ToolRegistry instance named: {name}")
+    return _registries[name]

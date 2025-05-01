@@ -9,7 +9,8 @@ from src.orchestration.task_queue import BaseTaskQueue
 from src.orchestration.orchestration_worker_pool import QueueWorkerPool, get_worker_pool, WorkerPoolType
 from src.config.logger import get_logger_with_context, ContextLoggerAdapter
 from src.config.settings import get_settings
-from src.core.exceptions import OrchestrationError, AgentNotFoundError, AgentExecutionError, TaskError, ErrorCode
+from src.config.errors import OrchestrationError
+from src.core.exceptions import AgentNotFoundError, AgentExecutionError, TaskError, ErrorCode
 from src.core.circuit_breaker import get_circuit_breaker, CircuitBreaker, CircuitOpenError
 from src.config.metrics import get_metrics_manager
 
@@ -70,7 +71,6 @@ class Orchestrator:
         try:
 
             async def run_planner() -> AgentResult:
-                nonlocal logger
                 agent_factory = await get_agent_factory()
                 planner_agent = await agent_factory.get_agent(planner_agent_name)
                 planner_core_context = AgentContext(task=task, trace_id=task.trace_id)
@@ -115,7 +115,6 @@ class Orchestrator:
             executor_core_context = AgentContext(task=task_for_executor, trace_id=task.trace_id)
 
             async def executor_task_with_cb():
-                nonlocal logger
                 agent_factory = await get_agent_factory()
                 task_id_local = executor_core_context.task.id if executor_core_context.task else 'unknown'
                 final_state = TaskState.FAILED

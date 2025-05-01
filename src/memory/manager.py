@@ -882,3 +882,100 @@ class MemoryManager:
             
         logger.debug(f'Memory manager stats retrieved: {list(stats.keys())}')
         return stats
+    
+# manager.py 파일의 get_memory_manager 함수 수정
+
+import threading
+from src.memory.redis_memory import RedisMemory # backends 폴더가 아니라 src.memory 에서 바로 가져옴
+
+# --- 싱글톤 인스턴스 관리 (이전과 동일) ---
+_memory_manager_instance: Optional['MemoryManager'] = None
+_memory_manager_lock = threading.Lock()
+
+async def get_memory_manager() -> 'MemoryManager':
+    """
+    MemoryManager 싱글톤 인스턴스를 가져옵니다.
+    첫 호출 시 설정을 기반으로 Redis 및 Vector Store 백엔드를 사용하여 인스턴스를 생성합니다.
+    """
+    global _memory_manager_instance
+    if _memory_manager_instance is None:
+        with _memory_manager_lock:
+            if _memory_manager_instance is None:
+                logger.info("Initializing MemoryManager instance...")
+
+                # 1. Redis 주 메모리 백엔드 초기화 (찾은 파일 사용!)
+                try:
+                    logger.info("Initializing Redis primary memory backend using RedisMemory class...")
+                    # RedisMemory 클래스를 직접 사용합니다.
+                    # __init__ 메서드가 default_ttl만 받으므로, Redis 연결은 클래스 내부에서 처리하는 방식입니다.
+                    primary_backend = RedisMemory(default_ttl=settings.MEMORY_TTL)
+                    # 내부적으로 settings.REDIS_HOST 등을 사용해서 연결할 것으로 예상됩니다.
+                    # 만약 RedisMemory 초기화 시 추가 인자가 필요하다면 여기에 전달해야 합니다.
+                    logger.info("Redis primary memory backend initialized.")
+
+                except Exception as e:
+                    logger.error(f"Failed to initialize Redis primary memory backend: {e}", exc_info=True)
+                    raise RuntimeError("Failed to initialize Redis backend") from e
+
+                # 2. 벡터 저장소 백엔드 초기화 (수정됨)
+                vector_backend: Optional[BaseVectorStore] = None
+                # settings.py의 VECTOR_DB_TYPE이 'none'이 아닐 때만 초기화 시도
+                if settings.VECTOR_DB_TYPE != 'none':
+                    try:
+                        vector_store_type = settings.VECTOR_DB_TYPE.lower() # 설정 이름 수정
+                        logger.info(f"Initializing vector store backend: {vector_store_type}")
+
+                        # --- BaseVectorStore를 사용하여 초기화 ---
+                        # BaseVectorStore 클래스가 백엔드 타입과 설정을 받아
+                        # 내부적으로 적절한 함수(backends 폴더의 함수들)를 연결한다고 가정합니다.
+                        from src.memory.base import BaseVectorStore # 기본 설계도 임포트
+
+                        # BaseVectorStore 초기화 시 필요한 설정값들을 settings에서 가져옵니다.
+                        # BaseVectorStore의 __init__이 어떻게 구현되었는지 확인 필요!
+                        # 여기서는 backend_type과 api_url을 받는다고 가정합니다.
+                        init_kwargs = {
+                            "backend_type": vector_store_type,
+                            "api_url": settings.VECTOR_DB_URL, # 공통 URL 설정 사용
+                            # 필요한 경우 다른 설정 추가 (예: settings.FAISS_DIRECTORY 등)
+                            # "faiss_directory": settings.FAISS_DIRECTORY # FAISS 사용 시 예시
+                        }
+                        # api_key가 필요한 경우, 환경 변수나 settings에서 가져와 전달
+                        # if vector_store_type == 'qdrant' and settings.QDRANT_API_KEY:
+                        #    init_kwargs['api_key'] = settings.QDRANT_API_KEY
+
+                        # **주의:** BaseVectorStore가 실제로 어떤 인자를 받는지 확인하고 맞춰야 합니다.
+                        vector_backend = BaseVectorStore(**init_kwargs)
+
+                        # BaseVectorStore 초기화 후, 내부적으로 backends/__init__.py의
+                        # register_backends와 유사한 로직이 실행될 것으로 기대합니다.
+                        # 또는 명시적으로 호출해야 할 수도 있습니다:
+                        # from src.memory.backends import register_backends
+                        # register_backends(BaseVectorStore) # 클래스 자체에 등록하는 방식일 경우
+
+                        logger.info(f"{vector_store_type.capitalize()} vector store backend initialized using BaseVectorStore.")
+
+                    except ImportError as e:
+                         logger.error(f"Failed to import BaseVectorStore or its dependencies: {e}", exc_info=True)
+                         vector_backend = None
+                    except AttributeError as e:
+                        logger.error(f"Vector store configuration missing or invalid in settings: {e}. Vector store disabled.")
+                        vector_backend = None
+                    except Exception as e:
+                        logger.error(f"Failed to initialize vector store backend: {e}", exc_info=True)
+                        vector_backend = None # 실패 시 비활성화
+                else:
+                    logger.info("Vector store is disabled (VECTOR_DB_TYPE is 'none').")
+
+                # 3. MemoryManager 인스턴스 생성 (이전과 거의 동일)
+                _memory_manager_instance = MemoryManager(
+                    primary_memory=primary_backend,
+                    vector_store=vector_backend, # <- 여기에 BaseVectorStore 인스턴스 전달
+                    cache_size=settings.MEMORY_MANAGER_CACHE_SIZE,
+                    cache_ttl=settings.CACHE_TTL,
+                    memory_ttl=settings.MEMORY_TTL
+                )
+                logger.info(f"MemoryManager instance created. Primary: {type(primary_backend).__name__}, Vector Store: {type(vector_backend).__name__ if vector_backend else 'None'}")
+
+    if _memory_manager_instance is None:
+         raise RuntimeError("MemoryManager instance could not be created.")
+    return _memory_manager_instance

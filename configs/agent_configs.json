@@ -1,0 +1,28 @@
+[
+    {
+      "name": "default_planner",
+      "description": "Default Planner Agent using the primary system LLM. Creates execution plans.",
+      "agent_type": "planner",  
+      "model": null,           
+      "capabilities": ["planning", "reasoning"],
+      "parameters": {
+        "temperature": 0.6,    
+        "max_tokens": 2048     
+      },
+      "mcp_enabled": true      
+    },
+    {
+      "name": "default_executor",
+      "description": "Default Executor Agent using the primary system LLM. Executes plans and uses tools.",
+      "agent_type": "executor", 
+      "model": null,           
+      "capabilities": ["execution", "tool_use"],
+      "allowed_tools": ["calculator", "web_search", "datetime_tool", "Google Search"], 
+      "parameters": {
+        "max_react_iterations": 7, 
+         "temperature": 0.4        
+      },
+      "mcp_enabled": true      
+    }
+    
+  ]

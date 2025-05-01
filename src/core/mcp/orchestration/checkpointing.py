@@ -6,7 +6,8 @@ from src.core.mcp.protocol import ContextProtocol
 from src.orchestration.workflow import WorkflowState
 from src.memory.manager import MemoryManager
 from src.config.logger import get_logger
-from src.core.exceptions import OrchestrationError, ErrorCode
+from src.config.errors import OrchestrationError
+from src.core.exceptions import ErrorCode
 logger = get_logger(__name__)
 
 class CheckpointManager:

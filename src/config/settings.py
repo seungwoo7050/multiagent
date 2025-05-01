@@ -43,6 +43,9 @@ class Settings(BaseSettings):
     LOG_TO_FILE: bool = False
     LOG_FILE_PATH: Optional[str] = None
     
+    # Agent settings
+    AGENT_CONFIG_FILE_PATH: str = 'configs/agent_configs.json'
+    
     # Worker settings
     WORKER_COUNT: int = Field(default_factory=lambda: max(os.cpu_count() or 1, 1))
     MAX_CONCURRENT_TASKS: int = 100
@@ -59,6 +62,7 @@ class Settings(BaseSettings):
     # Memory settings
     MEMORY_TTL: int = 86400  # 1 day in seconds
     CACHE_TTL: int = 3600    # 1 hour in seconds
+    MEMORY_MANAGER_CACHE_SIZE: int = 10000
     
     # LLM settings
     PRIMARY_LLM: str = 'gpt-3.5-turbo'
