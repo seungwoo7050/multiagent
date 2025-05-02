@@ -2,8 +2,7 @@
 Test for the string formatting fixes in the memory package.
 Verifies that f-strings with embedded quotes are correctly formatted.
 """
-import pytest
-from unittest.mock import patch, MagicMock, AsyncMock
+from unittest.mock import patch, AsyncMock
 
 from src.memory.redis_memory import RedisMemory
 from src.memory.manager import MemoryManager
@@ -30,7 +29,7 @@ class TestStringFormatting:
                     asyncio_run(redis_memory.clear(context_id))
                     
                     # Verify formatted log message - context is None
-                    mock_logger.info.assert_any_call(f'Clearing Redis memory for all contexts...')
+                    mock_logger.info.assert_any_call('Clearing Redis memory for all contexts...')
                     
                     # Test with specific context
                     context_id = "test_context"

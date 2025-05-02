@@ -1,12 +1,15 @@
 import ast
 import math
 import operator
-from typing import Any, Dict, List, Optional, Set, Type, Union
+from typing import Any, Dict, Type
+
 from pydantic import BaseModel, Field, field_validator
+
 from src.config.errors import ErrorCode, ToolError
 from src.config.logger import get_logger
 from src.tools.base import BaseTool
 from src.tools.registry import register_tool
+
 logger = get_logger(__name__)
 
 class CalculatorInput(BaseModel):

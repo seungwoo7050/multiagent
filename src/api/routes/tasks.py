@@ -1,19 +1,21 @@
 # src/api/routes/tasks.py
-from fastapi import APIRouter, HTTPException, Depends, status, Body
-from typing import Dict, Any
+import os
+import sys
+from typing import Any, Dict
 
-import sys, os
+from fastapi import APIRouter, Body, Depends, HTTPException, status
+
+# Import the *functional* dependency implementation and the type hint
+from src.api.dependencies import get_orchestrator_dependency_implementation
+from src.api.schemas.task import CreateTaskRequest, CreateTaskResponse
+from src.config.logger import get_logger
+from src.orchestration.orchestrator import \
+    Orchestrator  # Keep for type hinting if needed elsewhere
+from src.utils.ids import generate_task_id
+
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..'))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
-
-from src.api.schemas.task import CreateTaskRequest, CreateTaskResponse
-from src.config.logger import get_logger
-from src.utils.ids import generate_task_id
-# Import the *functional* dependency implementation and the type hint
-from src.api.dependencies import OrchestratorDep, get_orchestrator_dependency_implementation
-from src.orchestration.orchestrator import Orchestrator # Keep for type hinting if needed elsewhere
-
 logger = get_logger(__name__)
 router = APIRouter(prefix='/tasks', tags=['Tasks'])
 

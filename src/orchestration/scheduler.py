@@ -1,10 +1,10 @@
 import asyncio
 import time
-from typing import Any, Dict, Optional, Tuple, TypeVar, List, cast
+from typing import Any, Dict, List, Optional, Tuple
 
-from src.core.task import BaseTask, TaskPriority
 from src.config.logger import get_logger
 from src.config.metrics import get_metrics_manager
+from src.core.task import TaskPriority
 
 # Initialize logger and metrics manager
 logger = get_logger(__name__)
@@ -175,7 +175,7 @@ class PriorityScheduler:
             for item in items:
                 try:
                     await self._queue.put(item)
-                except:
+                except Exception:
                     pass
                     
             return []

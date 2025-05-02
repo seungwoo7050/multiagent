@@ -1,11 +1,11 @@
-from typing import Dict, Optional, Type, Any, cast
 import time
-from src.core.mcp.protocol import ContextProtocol
-from src.core.mcp.schema import BaseContextSchema
-from src.core.mcp.schema import TaskContext
-from src.core.mcp.compression import optimize_context_data
+from typing import Dict, Optional, Type
+
 from src.config.logger import get_logger
 from src.config.metrics import get_metrics_manager
+from src.core.mcp.compression import optimize_context_data
+from src.core.mcp.protocol import ContextProtocol
+from src.core.mcp.schema import BaseContextSchema
 
 logger = get_logger(__name__)
 metrics = get_metrics_manager()

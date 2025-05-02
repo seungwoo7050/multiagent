@@ -1,12 +1,13 @@
 import asyncio
 import time
-from typing import Dict, Optional, Any, Mapping, Set
+from typing import Any, Dict, Set
+
 import aiohttp
-from aiohttp.client import ClientTimeout
-from src.config.settings import get_settings
+
+from src.config.errors import ConnectionError, ErrorCode
 from src.config.logger import get_logger
-from src.config.metrics import get_metrics_manager, MEMORY_METRICS
-from src.config.errors import ConnectionError, ErrorCode, BaseError, convert_exception
+from src.config.metrics import MEMORY_METRICS, get_metrics_manager
+from src.config.settings import get_settings
 
 settings = get_settings()
 logger = get_logger(__name__)
@@ -44,7 +45,7 @@ async def get_connection_pool(provider: str) -> aiohttp.ClientSession:
             timeout = aiohttp.ClientTimeout(total=timeout_seconds, connect=10.0, sock_connect=10.0, sock_read=timeout_seconds)
             session = aiohttp.ClientSession(connector=connector, timeout=timeout, raise_for_status=False, trust_env=True)
             _CONNECTION_POOLS[provider] = session
-            duration = time.monotonic() - start_time
+            time.monotonic() - start_time
             logger.info(f'Successfully created connection pool for {provider} (Size: {pool_size}, Timeout: {timeout_seconds}s)')
             return session
         except Exception as e:

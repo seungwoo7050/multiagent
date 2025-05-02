@@ -1,10 +1,12 @@
-from typing import Any, Dict, Optional, Type, cast
-from src.core.mcp.protocol import ContextProtocol
-from src.core.mcp.adapter_base import MCPAdapterBase
-from src.core.mcp.schema import TaskContext
-from src.core.task import BaseTask, TaskState
+from typing import Any, Dict, Optional, cast
+
 from src.config.logger import get_logger
 from src.core.exceptions import SerializationError
+from src.core.mcp.adapter_base import MCPAdapterBase
+from src.core.mcp.protocol import ContextProtocol
+from src.core.mcp.schema import TaskContext
+from src.core.task import BaseTask, TaskState
+
 logger = get_logger(__name__)
 
 class TaskAdapter(MCPAdapterBase):

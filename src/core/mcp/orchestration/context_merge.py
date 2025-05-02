@@ -1,12 +1,15 @@
-from typing import List, Dict, Any, Optional, Type, TypeVar, Union, cast
+import asyncio
 import copy
 import time
-import asyncio
 from enum import Enum
-from pydantic import BaseModel, Field, ConfigDict
+from typing import Any, Callable, Dict, List, Optional, Type, TypeVar, cast
+
+from pydantic import BaseModel
+
+from src.config.logger import get_logger
 from src.core.mcp.protocol import ContextProtocol
 from src.core.mcp.schema import BaseContextSchema
-from src.config.logger import get_logger
+
 logger = get_logger(__name__)
 TContext = TypeVar('TContext', bound=ContextProtocol)
 
@@ -111,11 +114,8 @@ class ContextMerger:
                     logger.warning(f"Unknown or unhandled merge strategy '{strategy.value}' for key '{key}'. Falling back to OVERWRITE.")
                     merged[key] = new_value
         return merged
-from pydantic import BaseModel, Field, ConfigDict
-from enum import Enum
-import copy
-import asyncio
-import time
+
+
 _merger_instance: Optional[ContextMerger] = None
 _merger_lock = asyncio.Lock()
 

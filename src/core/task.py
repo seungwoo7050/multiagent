@@ -2,10 +2,12 @@ import asyncio
 import uuid
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Optional, Set, Union, cast
-from pydantic import BaseModel, Field, field_validator
+from typing import Any, Dict, List, Optional
+
+from pydantic import BaseModel, Field
+
 from src.config.logger import get_logger
-from src.config.metrics import get_metrics_manager, TASK_COMPLETED_TOTAL
+from src.config.metrics import get_metrics_manager
 from src.utils.timing import get_current_time_ms
 
 logger = get_logger(__name__)

@@ -1,16 +1,19 @@
 # src/api/routes/config.py
 
-from fastapi import APIRouter, Depends, HTTPException, status
-from typing import Dict, Any, Set
-
+import os
 # 프로젝트 루트 경로 설정 (app.py와 동일하게)
-import sys, os
+import sys
+from typing import Any, Dict, Set
+
+from fastapi import APIRouter, Depends, HTTPException, status
+
+from src.config.logger import get_logger
+from src.config.settings import Settings, get_settings
+
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..'))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
-from src.config.logger import get_logger
-from src.config.settings import Settings, get_settings
 
 logger = get_logger(__name__)
 

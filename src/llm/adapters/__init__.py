@@ -1,8 +1,10 @@
-from typing import Dict, Type, Optional, Any, Union
-from src.llm.base import BaseLLMAdapter
+from typing import Any, Dict, Optional, Type
+
+from src.config.errors import ErrorCode, LLMError
 from src.config.logger import get_logger
 from src.config.settings import get_settings
-from src.config.errors import LLMError, ErrorCode
+from src.llm.base import BaseLLMAdapter
+
 settings = get_settings()
 logger = get_logger(__name__)
 _ADAPTER_REGISTRY: Dict[str, Type[BaseLLMAdapter]] = {}

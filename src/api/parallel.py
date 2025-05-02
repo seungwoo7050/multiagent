@@ -1,6 +1,8 @@
 import asyncio
-from typing import List, Coroutine, Any, Optional, Dict, cast
+from typing import Any, Coroutine, List, Optional
+
 from src.config.logger import get_logger
+
 logger = get_logger(__name__)
 
 async def execute_in_background(tasks: List[Coroutine[Any, Any, Any]], task_names: Optional[List[str]]=None) -> None:

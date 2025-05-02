@@ -1,7 +1,6 @@
 import unittest
 import asyncio
 from unittest.mock import MagicMock, patch
-from typing import Dict, Any
 
 from src.tools.base import BaseTool, DynamicTool
 from src.tools.calculator import CalculatorTool

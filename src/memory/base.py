@@ -3,7 +3,7 @@ Base interfaces for memory and vector storage systems.
 Defines the contract that all implementations must follow.
 """
 import abc
-from typing import Any, Dict, List, Optional, Set, Tuple, Union
+from typing import Any, Dict, List, Optional
 
 from src.config.logger import get_logger
 
@@ -29,7 +29,6 @@ class BaseMemory(abc.ABC):
         Returns:
             The stored data or default if not found
         """
-        pass
 
     @abc.abstractmethod
     async def save_context(self, key: str, context_id: str, data: Any, ttl: Optional[int]=None) -> bool:
@@ -45,7 +44,6 @@ class BaseMemory(abc.ABC):
         Returns:
             bool: True if save was successful
         """
-        pass
 
     @abc.abstractmethod
     async def delete_context(self, key: str, context_id: str) -> bool:
@@ -59,7 +57,6 @@ class BaseMemory(abc.ABC):
         Returns:
             bool: True if deletion was successful
         """
-        pass
 
     @abc.abstractmethod
     async def clear(self, context_id: Optional[str]=None) -> bool:
@@ -72,7 +69,6 @@ class BaseMemory(abc.ABC):
         Returns:
             bool: True if clearing was successful
         """
-        pass
 
     @abc.abstractmethod
     async def list_keys(self, context_id: Optional[str]=None, pattern: Optional[str]=None) -> List[str]:
@@ -86,7 +82,6 @@ class BaseMemory(abc.ABC):
         Returns:
             List[str]: List of matching keys
         """
-        pass
 
     @abc.abstractmethod
     async def exists(self, key: str, context_id: str) -> bool:
@@ -100,7 +95,6 @@ class BaseMemory(abc.ABC):
         Returns:
             bool: True if key exists
         """
-        pass
 
     @abc.abstractmethod
     async def bulk_load(self, keys: List[str], context_id: str, default: Any=None) -> Dict[str, Any]:
@@ -115,7 +109,6 @@ class BaseMemory(abc.ABC):
         Returns:
             Dict[str, Any]: Dictionary of key-value pairs
         """
-        pass
 
     @abc.abstractmethod
     async def bulk_save(self, data: Dict[str, Any], context_id: str, ttl: Optional[int]=None) -> bool:
@@ -130,7 +123,6 @@ class BaseMemory(abc.ABC):
         Returns:
             bool: True if save was successful
         """
-        pass
 
     async def get_stats(self) -> Dict[str, Any]:
         """
@@ -170,7 +162,6 @@ class BaseVectorStore(abc.ABC):
         Returns:
             str: ID of the stored vector
         """
-        pass
 
     @abc.abstractmethod
     async def search_vectors(self, query: str, k: int=5, context_id: Optional[str]=None, filter_metadata: Optional[Dict[str, Any]]=None) -> List[Dict[str, Any]]:
@@ -186,7 +177,6 @@ class BaseVectorStore(abc.ABC):
         Returns:
             List[Dict[str, Any]]: Search results with similarity scores
         """
-        pass
 
     @abc.abstractmethod
     async def delete_vectors(self, ids: Optional[List[str]]=None, context_id: Optional[str]=None) -> bool:
@@ -200,7 +190,6 @@ class BaseVectorStore(abc.ABC):
         Returns:
             bool: True if deletion was successful
         """
-        pass
 
     @abc.abstractmethod
     async def get_stats(self) -> Dict[str, Any]:
@@ -210,4 +199,3 @@ class BaseVectorStore(abc.ABC):
         Returns:
             Dict[str, Any]: Dictionary of statistics
         """
-        pass

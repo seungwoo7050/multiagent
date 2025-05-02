@@ -1,11 +1,12 @@
-import re
 import hashlib
 from functools import lru_cache
-from typing import Dict, Optional, Union, List, Tuple, Any
+from typing import Any, Dict, Optional
+
 import tiktoken
+
 from src.config.logger import get_logger
+from src.config.metrics import MEMORY_METRICS, get_metrics_manager
 from src.config.settings import get_settings
-from src.config.metrics import get_metrics_manager, MEMORY_METRICS
 
 settings = get_settings()
 logger = get_logger(__name__)
@@ -120,7 +121,7 @@ def count_tokens_sync(model: str, text: str) -> int:
     try:
         tokenizer = _get_tokenizer_for_model(model)
         token_count = len(tokenizer.encode(text))
-    except Exception as e:
+    except Exception:
         token_count = _approximate_token_count(text)
     _TOKEN_COUNT_CACHE[cache_key] = token_count
     return token_count

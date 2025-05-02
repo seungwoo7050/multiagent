@@ -3,14 +3,11 @@ Test for the optimized vector search implementation.
 Compares performance between optimized vector search and the fallback method.
 """
 import pytest
-import asyncio
 import time
 import numpy as np
-from typing import List, Dict, Any, Optional
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 from src.memory.vector_store import VectorStore
-from src.config.metrics import get_metrics_manager
 
 @pytest.mark.asyncio
 class TestVectorStoreOptimization:
@@ -82,7 +79,7 @@ class TestVectorStoreOptimization:
         # Verify performance improvement
         # The NumPy version should be significantly faster (at least 2x)
         performance_ratio = fallback_time / optimized_time
-        print(f"\nPerformance comparison:")
+        print("\nPerformance comparison:")
         print(f"Optimized implementation: {optimized_time:.6f} seconds")
         print(f"Fallback implementation: {fallback_time:.6f} seconds")
         print(f"Speed improvement: {performance_ratio:.2f}x faster")

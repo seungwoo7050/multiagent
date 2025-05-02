@@ -1,5 +1,7 @@
+from typing import Any, Dict, Optional
+
 from pydantic import BaseModel, Field
-from typing import Dict, Any, Optional
+
 
 class CreateTaskRequest(BaseModel):
     goal: str = Field(..., description='작업의 최종 목표 설명')

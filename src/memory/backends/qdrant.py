@@ -28,7 +28,7 @@ async def store_vector(vector_store, vector_id: str, vector: List[float], metada
     try:
         from qdrant_client import QdrantClient
         from qdrant_client.http import models
-        
+
         # Get or create client
         if not hasattr(vector_store, '_qdrant_client'):
             if not vector_store.api_url:
@@ -92,7 +92,7 @@ async def search_vectors(vector_store, query_vector: List[float], k: int, collec
     try:
         from qdrant_client import QdrantClient
         from qdrant_client.http import models
-        
+
         # Get client
         if not hasattr(vector_store, '_qdrant_client'):
             if not vector_store.api_url:
@@ -170,7 +170,7 @@ async def delete_vectors(vector_store, ids: Optional[List[str]], collection: str
     try:
         from qdrant_client import QdrantClient
         from qdrant_client.http import models
-        
+
         # Get client
         if not hasattr(vector_store, '_qdrant_client'):
             if not vector_store.api_url:

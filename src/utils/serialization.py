@@ -1,12 +1,14 @@
-import importlib
+import dataclasses
 import datetime
+import importlib
 import json
 import uuid
-import dataclasses
 from enum import Enum
-from typing import Any, Dict, List, Optional, Set, Tuple, Type, Union
+from typing import Any, Dict, Optional, Type
+
 import msgpack
 from pydantic import BaseModel
+
 from src.config.logger import get_logger
 from src.core.exceptions import SerializationError
 
@@ -110,7 +112,7 @@ def _object_hook(obj: Dict[str, Any]) -> Any:
             enum_class = _ENUM_REGISTRY[class_path]
             try:
                 return enum_class(enum_value)
-            except ValueError as e:
+            except ValueError:
                 logger.warning(f"Invalid value '{enum_value}' for enum {class_path}. Returning raw value.", exc_info=True)
                 return enum_value
         try:
@@ -121,7 +123,7 @@ def _object_hook(obj: Dict[str, Any]) -> Any:
                 raise TypeError(f'{class_path} is not an Enum')
             _ENUM_REGISTRY[class_path] = enum_class
             return enum_class(enum_value)
-        except Exception as e:
+        except Exception:
             logger.error(f'Failed to deserialize enum: {class_path}, value: {enum_value}', exc_info=True)
             logger.warning(f"Returning raw value '{enum_value}' instead of enum instance for {class_path}")
             return enum_value

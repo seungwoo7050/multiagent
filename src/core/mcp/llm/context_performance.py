@@ -1,6 +1,8 @@
-from typing import Dict, Optional, Any
+from typing import Dict, Optional
+
 from src.core.mcp.protocol import ContextProtocol
 from src.core.mcp.schema import TaskContext
+
 
 def get_context_labels(context: Optional[ContextProtocol]) -> Dict[str, str]:
     labels: Dict[str, str] = {}

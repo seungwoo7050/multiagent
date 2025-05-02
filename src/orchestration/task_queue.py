@@ -1,15 +1,17 @@
 import abc
 import asyncio
 import time
-import random
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple
+
 import redis.asyncio as aioredis
+
 from src.config.connections import get_connection_manager
+from src.config.errors import (BaseError, ErrorCode, MemoryError,
+                               convert_exception)
 from src.config.logger import get_logger
 from src.config.settings import get_settings
-from src.config.errors import MemoryError, ErrorCode, convert_exception, BaseError
-from src.utils.serialization import serialize, deserialize, SerializationFormat
 from src.memory.utils import AsyncLock
+from src.utils.serialization import SerializationFormat, deserialize, serialize
 
 logger = get_logger(__name__)
 settings = get_settings()

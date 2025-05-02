@@ -1,22 +1,20 @@
 import json
-import asyncio
 import re
 import time
-from typing import Any, Dict, Optional, cast, List, Tuple
-from src.core.agent import BaseAgent, AgentContext as CoreAgentContext, AgentResult, AgentState
+from typing import Any, Dict, List, Optional, Tuple
+
 from src.agents.config import AgentConfig
 from src.agents.context_manager import AgentContextManager
-from src.core.mcp.protocol import ContextProtocol
-from src.core.mcp.schema import BaseContextSchema, TaskContext
-from src.core.mcp.adapters.llm_adapter import LLMInputContext, LLMOutputContext, LLMAdapter
-from src.tools.runner import ToolRunner
-from src.tools.registry import ToolRegistry
-from src.config.logger import get_logger_with_context, ContextLoggerAdapter
-from src.core.exceptions import AgentExecutionError, TaskError
-from src.prompts.templates import PromptTemplate
+from src.config.errors import ToolError
+from src.config.logger import ContextLoggerAdapter, get_logger_with_context
 from src.config.settings import get_settings
-from src.config.errors import ErrorCode, LLMError, ToolError
+from src.core.agent import AgentContext as CoreAgentContext
+from src.core.agent import AgentResult, AgentState, BaseAgent
+from src.core.exceptions import TaskError
+from src.core.mcp.adapters.llm_adapter import LLMAdapter, LLMInputContext
 from src.core.task import TaskResult
+from src.tools.registry import ToolRegistry
+from src.tools.runner import ToolRunner
 
 settings = get_settings()
 logger: ContextLoggerAdapter = get_logger_with_context(__name__)
@@ -168,6 +166,7 @@ class MCPExecutorAgent(BaseAgent):
         
         llm_input_context = LLMInputContext(
             model=self.config.model or settings.PRIMARY_LLM, 
+            prompt=prompt,
             messages=[{'role': 'user', 'content': prompt}], 
             parameters={
                 'max_tokens': 150, 
@@ -216,6 +215,7 @@ class MCPExecutorAgent(BaseAgent):
         
         llm_input_context = LLMInputContext(
             model=self.config.model or settings.PRIMARY_LLM, 
+            prompt=prompt,
             messages=[{'role': 'user', 'content': prompt}], 
             parameters={
                 'max_tokens': 150, 

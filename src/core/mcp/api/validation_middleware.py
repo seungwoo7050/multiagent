@@ -1,12 +1,16 @@
 import json
-from typing import Optional, Any, cast
-from fastapi import Request, Response, HTTPException, status
-from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
+from typing import Optional, cast
+
+from fastapi import Request, Response, status
+from starlette.middleware.base import (BaseHTTPMiddleware,
+                                       RequestResponseEndpoint)
 from starlette.types import ASGIApp
+
 from src.config.logger import get_logger
 from src.core.mcp.protocol import ContextProtocol
-from src.core.mcp.versioning import check_version_compatibility, get_latest_supported_version
-from src.config.errors import ErrorCode
+from src.core.mcp.versioning import (check_version_compatibility,
+                                     get_latest_supported_version)
+
 logger = get_logger(__name__)
 MCP_VERSION_HEADER = 'X-MCP-Version'
 MCP_CONTEXT_TYPE_HEADER = 'X-MCP-Context-Type'

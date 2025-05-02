@@ -2,15 +2,16 @@ import asyncio
 import hashlib
 import json
 import time
-from typing import Any, Dict, List, Optional, Set, Type, Union
 import urllib.parse
+from typing import Any, Dict, List, Optional, Type
 
 import aiohttp
 from pydantic import BaseModel, Field, field_validator
+
+from src.config.connections import get_connection_manager
 from src.config.errors import ErrorCode, ToolError
 from src.config.logger import get_logger
 from src.config.metrics import get_metrics_manager
-from src.config.connections import get_connection_manager
 from src.config.settings import get_settings
 from src.tools.base import BaseTool
 from src.tools.registry import register_tool
@@ -301,7 +302,7 @@ class WebSearchTool(BaseTool):
         
         try:
             redis = await conn_manager.get_redis_async_connection()
-            start_time = time.time()
+            time.time()
             cached_data_bytes: Optional[bytes] = await redis.get(cache_key)
             
             if cached_data_bytes:
@@ -329,7 +330,7 @@ class WebSearchTool(BaseTool):
             serialized_data: str = json.dumps(data)
             serialized_bytes: bytes = serialized_data.encode('utf-8')
             
-            start_time = time.time()
+            time.time()
             await redis.setex(cache_key, self.cache_ttl, serialized_bytes)
             
             logger.debug(f'Successfully saved result to cache (Key: {cache_key}, TTL: {self.cache_ttl}s)')

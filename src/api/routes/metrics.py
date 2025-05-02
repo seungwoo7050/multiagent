@@ -1,20 +1,23 @@
 # src/api/routes/metrics.py
 
+import os
+# 프로젝트 루트 경로 설정 (app.py와 동일하게)
+import sys
+
 from fastapi import APIRouter
 from fastapi.responses import PlainTextResponse
-
-# 프로젝트 루트 경로 설정 (app.py와 동일하게)
-import sys, os
-project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..'))
-if project_root not in sys.path:
-    sys.path.insert(0, project_root)
 
 from src.config.logger import get_logger
 from src.config.metrics import get_metrics_manager
 
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..'))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
 # Prometheus 클라이언트 라이브러리 import 시도
 try:
-    from prometheus_client import generate_latest, CONTENT_TYPE_LATEST, REGISTRY
+    from prometheus_client import (CONTENT_TYPE_LATEST, REGISTRY,
+                                   generate_latest)
     prometheus_client_available = True
 except ImportError:
     prometheus_client_available = False

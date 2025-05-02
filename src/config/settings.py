@@ -2,14 +2,15 @@
 Settings management for the Multi-Agent Platform.
 Uses Pydantic for validation and environment variable loading.
 """
-import os
 import json
-import sys
 import logging
-from typing import Dict, List, Optional, Set, Literal, Union, Any
-from functools import lru_cache
+import os
+import sys
 from copy import deepcopy
-from pydantic import Field, field_validator, ConfigDict, ValidationInfo
+from functools import lru_cache
+from typing import Any, Dict, List, Literal, Optional, Set, Union
+
+from pydantic import ConfigDict, Field, ValidationInfo, field_validator
 from pydantic_settings import BaseSettings
 
 # Use a simple logger for bootstrap operations
@@ -49,6 +50,7 @@ class Settings(BaseSettings):
     # Worker settings
     WORKER_COUNT: int = Field(default_factory=lambda: max(os.cpu_count() or 1, 1))
     MAX_CONCURRENT_TASKS: int = 100
+    TASK_STATUS_TTL: int = 86400
     
     # Connection settings
     REQUEST_TIMEOUT: float = 30.0
@@ -108,6 +110,9 @@ class Settings(BaseSettings):
         }
     }
     
+    PLANNER_AGENT_NAME: str = 'default_planner'
+    EXECUTOR_AGENT_NAME: str = 'default_executor'
+    
     # API settings
     API_HOST: str = 'localhost'
     API_PORT: int = 8000
@@ -129,6 +134,9 @@ class Settings(BaseSettings):
     # Vector DB settings
     VECTOR_DB_URL: Optional[str] = None
     VECTOR_DB_TYPE: Literal['chroma', 'qdrant', 'faiss', 'none'] = 'none'
+    
+    TASK_QUEUE_STREAM_NAME: str = "multi_agent_tasks"
+    TASK_QUEUE_GROUP_NAME: str = "agent_workers"
 
     @field_validator('ENABLED_MODELS_SET', mode='before')
     @classmethod

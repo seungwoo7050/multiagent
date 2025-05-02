@@ -2,18 +2,18 @@
 Performance metrics collection for the Multi-Agent Platform.
 Uses Prometheus for metrics collection with optimized performance.
 """
-import time
+import asyncio
 import functools
 import threading
-import asyncio
-from typing import Callable, Any, Dict, Optional, List, Union, Set, TypeVar
+import time
+from typing import Any, Callable, Dict, Optional, TypeVar, Union
 
 import prometheus_client
-from prometheus_client import Histogram, Counter, Gauge, Summary
+from prometheus_client import Counter, Gauge, Histogram, Summary
 from prometheus_client.exposition import start_http_server
 
-from src.config.settings import get_settings
 from src.config.logger import get_logger
+from src.config.settings import get_settings
 
 settings = get_settings()
 logger = get_logger(__name__)
@@ -439,7 +439,7 @@ class MetricsManager:
                     try:
                         result = await func(*args, **kwargs)
                         return result
-                    except Exception as e:
+                    except Exception:
                         if count_exceptions:
                             duration = time.monotonic() - start_time
                             if labels:
@@ -463,7 +463,7 @@ class MetricsManager:
                     try:
                         result = func(*args, **kwargs)
                         return result
-                    except Exception as e:
+                    except Exception:
                         if count_exceptions:
                             duration = time.monotonic() - start_time
                             if labels:

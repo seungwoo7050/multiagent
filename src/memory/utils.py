@@ -9,7 +9,7 @@ import pickle
 import random
 import re
 import time
-from typing import Any, Dict, Optional, cast
+from typing import Any, Optional, cast
 
 import msgpack
 
@@ -90,7 +90,7 @@ async def serialize_data(data: Any) -> bytes:
                 serialized_data = b'json:' + json_str.encode('utf-8')
                 logger.debug(f'Data serialized using JSON (Size: {len(serialized_data)} bytes)')
             except Exception as e_json:
-                logger.error(f'All serialization methods (MessagePack, Pickle, JSON) failed.', exc_info=True)
+                logger.error('All serialization methods (MessagePack, Pickle, JSON) failed.', exc_info=True)
                 raise Exception(f'Could not serialize data after trying all methods. Last error (JSON): {e_json}') from e_json
     
     # Track metrics

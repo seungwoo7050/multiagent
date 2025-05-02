@@ -3,14 +3,14 @@ import asyncio
 import hashlib
 import json
 import time
-from typing import Any, Dict, List, Optional, Tuple, Union, TypeVar, Generic
-from src.config.metrics import get_metrics_manager, LLM_METRICS
+from typing import Any, Dict, List, Optional, TypeVar, Union
+
+from src.config.errors import ErrorCode, LLMError
 from src.config.logger import get_logger
+from src.config.metrics import get_metrics_manager
 from src.config.settings import get_settings
-from src.config.errors import LLMError, ErrorCode
+from src.llm.cache import cache_result, get_cache
 from src.utils.timing import async_timed
-from src.llm.cache import get_cache, cache_result
-from src.llm.tokenizer import count_tokens
 
 settings = get_settings()
 logger = get_logger(__name__)

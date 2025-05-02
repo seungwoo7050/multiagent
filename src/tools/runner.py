@@ -1,14 +1,13 @@
 import asyncio
-import json
 import random
 import time
 import traceback
 from typing import Any, Coroutine, Dict, List, Optional, Set, Tuple, Union
+
 from src.config.errors import ErrorCode, ToolError
 from src.config.logger import get_logger
 from src.config.metrics import TOOL_METRICS
 from src.tools.base import BaseTool
-from src.utils.timing import AsyncTimer, Timer
 
 logger = get_logger(__name__)
 
@@ -235,7 +234,7 @@ class ToolRunner:
             
             # Create a task that will raise the exception when awaited
             async def raise_exception_task():
-                raise e
+                raise
                 
             return asyncio.create_task(raise_exception_task(), name=f'tool_task_{tool_name}_error')
 

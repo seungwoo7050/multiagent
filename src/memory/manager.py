@@ -3,20 +3,21 @@ Memory manager with caching and orchestration.
 Provides a high-level interface to memory and vector storage systems.
 """
 import asyncio
-import functools
-import random
+import threading
 import time
-from typing import Any, Dict, List, Optional, Set, Tuple, Union, Callable, Coroutine, TypeVar, cast
+from typing import (Any, Callable, Coroutine, Dict, List, Optional, TypeVar,
+                    cast)
 
-from cachetools import LRUCache, TTLCache
+from cachetools import TTLCache
 
 from src.config.errors import ErrorCode, MemoryError, convert_exception
 from src.config.logger import get_logger
-from src.config.metrics import get_metrics_manager, MEMORY_METRICS
+from src.config.metrics import MEMORY_METRICS, get_metrics_manager
 from src.config.settings import get_settings
 from src.memory.base import BaseMemory, BaseVectorStore
-from src.memory.utils import matches_pattern, generate_memory_key
-from src.utils.timing import async_timed
+from src.memory.redis_memory import \
+    RedisMemory  # backends 폴더가 아니라 src.memory 에서 바로 가져옴
+from src.memory.utils import generate_memory_key, matches_pattern
 
 logger = get_logger(__name__)
 metrics = get_metrics_manager()
@@ -612,7 +613,7 @@ class MemoryManager:
                         if k in self.cache:
                             del self.cache[k]
                             removed_count += 1
-                    logger.debug(f'Finished invalidating keys.')
+                    logger.debug('Finished invalidating keys.')
                     
             metrics.track_cache('size', cache_type='memory_manager_l1', value=len(self.cache))
             logger.info(f'Invalidated {removed_count} items from L1 cache.')
@@ -885,8 +886,7 @@ class MemoryManager:
     
 # manager.py 파일의 get_memory_manager 함수 수정
 
-import threading
-from src.memory.redis_memory import RedisMemory # backends 폴더가 아니라 src.memory 에서 바로 가져옴
+
 
 # --- 싱글톤 인스턴스 관리 (이전과 동일) ---
 _memory_manager_instance: Optional['MemoryManager'] = None
@@ -928,7 +928,6 @@ async def get_memory_manager() -> 'MemoryManager':
                         # --- BaseVectorStore를 사용하여 초기화 ---
                         # BaseVectorStore 클래스가 백엔드 타입과 설정을 받아
                         # 내부적으로 적절한 함수(backends 폴더의 함수들)를 연결한다고 가정합니다.
-                        from src.memory.base import BaseVectorStore # 기본 설계도 임포트
 
                         # BaseVectorStore 초기화 시 필요한 설정값들을 settings에서 가져옵니다.
                         # BaseVectorStore의 __init__이 어떻게 구현되었는지 확인 필요!

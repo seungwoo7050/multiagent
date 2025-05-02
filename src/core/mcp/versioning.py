@@ -1,7 +1,9 @@
-from typing import Dict, Any, Type
+from typing import Any, Dict
+
 from packaging import version
-from src.core.mcp.protocol import ContextProtocol
+
 from src.config.logger import get_logger
+
 logger = get_logger(__name__)
 SUPPORTED_VERSIONS = ['1.0.0']
 

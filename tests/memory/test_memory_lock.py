@@ -5,12 +5,10 @@ Verifies that lock cleanup happens deterministically based on time rather than r
 import pytest
 import asyncio
 import time
-from typing import Dict, Any, List, Set
-from unittest.mock import patch, MagicMock, AsyncMock
+from unittest.mock import patch, AsyncMock
 
 from src.memory.manager import MemoryManager
 from src.memory.base import BaseMemory
-from src.config.metrics import get_metrics_manager
 
 @pytest.mark.asyncio
 class TestMemoryManagerLocks:

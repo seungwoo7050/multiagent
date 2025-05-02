@@ -16,24 +16,19 @@ import json
 import time
 import asyncio
 import unittest
-import threading
 import tempfile
 from unittest import mock
 import pytest
-from concurrent.futures import ThreadPoolExecutor
 
 # Mock Redis and aiohttp for testing
 import redis
-import redis.asyncio as aioredis
-import aiohttp
 
 # Import the modules we're testing
-from src.config import initialize_config
-from src.config.settings import Settings, get_settings
+from src.config.settings import get_settings
 from src.config.logger import get_logger, get_logger_with_context, setup_logging
 from src.config.metrics import get_metrics_manager, MEMORY_METRICS
 from src.config.connections import ConnectionManager, get_connection_manager
-from src.config.errors import BaseError, ErrorCode, ConnectionError
+from src.config.errors import BaseError, ErrorCode
 
 
 class TestConfigSettings(unittest.TestCase):
@@ -258,16 +253,16 @@ class TestConfigConnections:
         manager = get_connection_manager()
         
         # Get Redis connection multiple times - should use the same pool
-        conn1 = manager.get_redis_connection()
-        conn2 = manager.get_redis_connection()
-        conn3 = manager.get_redis_connection()
+        manager.get_redis_connection()
+        manager.get_redis_connection()
+        manager.get_redis_connection()
         
         # Verify only one pool was created
         assert self.mock_redis_connection.call_count <= 1
 
         # Test async connections
-        conn4 = await manager.get_redis_async_connection()
-        conn5 = await manager.get_redis_async_connection()
+        await manager.get_redis_async_connection()
+        await manager.get_redis_async_connection()
         
         # Verify only one async pool was created
         assert self.mock_redis_connection.call_count <= 1
@@ -348,9 +343,9 @@ class TestConfigConnections:
         manager = get_connection_manager()
         
         # Get connections to initialize pools
-        sync_conn = manager.get_redis_connection()
-        async_conn = await manager.get_redis_async_connection()
-        http_session = await manager.get_http_session()
+        manager.get_redis_connection()
+        await manager.get_redis_async_connection()
+        await manager.get_http_session()
         
         # Close connections
         await manager.close_all_connections()

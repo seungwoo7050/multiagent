@@ -1,9 +1,12 @@
 import asyncio
-from typing import Any, Dict, Optional, cast
+from typing import Any, Optional
+
+from src.api.streaming import ConnectionManager, get_connection_manager
 from src.config.logger import get_logger
 from src.core.mcp.protocol import ContextProtocol
-from src.core.mcp.serialization import serialize_context, SerializationFormat, SerializationError
-from src.api.streaming import ConnectionManager, get_connection_manager
+from src.core.mcp.serialization import (SerializationError,
+                                        SerializationFormat, serialize_context)
+
 logger = get_logger(__name__)
 
 class MCPWebSocketAdapter:
@@ -30,7 +33,7 @@ class MCPWebSocketAdapter:
         try:
             serialized_data: bytes = serialize_context(context, format=target_format)
             if target_format == SerializationFormat.JSON:
-                message_to_send: Any = serialized_data.decode('utf-8')
+                message_to_send: Any = serialized_data.decode('utf-8') # ???
                 try:
                     message_dict = context.serialize()
                 except AttributeError:

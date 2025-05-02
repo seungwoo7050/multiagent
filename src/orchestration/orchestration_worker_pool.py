@@ -1,19 +1,18 @@
 import asyncio
-import time
-import os
 import functools
-import random
+import os
 import threading
+import time
 from enum import Enum
-from typing import Any, Callable, Coroutine, Dict, List, Optional, Set, Tuple, cast
+from typing import Any, Callable, Coroutine, Dict, Optional, Set, Tuple
 
-from pydantic import BaseModel, Field, field_validator, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from src.config.logger import get_logger
 from src.config.metrics import get_metrics_manager
 from src.config.settings import get_settings
 from src.core.exceptions import WorkerPoolError
-from src.utils.timing import AsyncTimer, Timer, get_current_time_ms
+from src.utils.timing import get_current_time_ms
 
 # Initialize global dependencies
 logger = get_logger(__name__)
@@ -457,45 +456,45 @@ _worker_pools: Dict[str, Any] = {} # 생성된 워커 풀들을 저장할 딕셔
 _worker_pool_lock = threading.Lock()
 
 # 2. get_worker_pool 함수 정의 추가
-def get_worker_pool(
-    name: str = 'default',
-    pool_type: WorkerPoolType = WorkerPoolType.QUEUE_ASYNCIO,
-    config: Optional[OrchestrationWorkerPoolConfig] = None
-) -> Any: # 실제로는 QueueWorkerPool 또는 다른 풀 타입을 반환
-    """
-    지정된 이름과 타입의 Worker Pool 싱글톤 인스턴스를 가져옵니다.
-    첫 호출 시 설정을 기반으로 인스턴스를 생성합니다.
-    """
-    global _worker_pools
-    pool_key = f"{name}_{pool_type.value}" # 이름과 타입을 합쳐서 고유 키 생성
+# def get_worker_pool(
+#     name: str = 'default',
+#     pool_type: WorkerPoolType = WorkerPoolType.QUEUE_ASYNCIO,
+#     config: Optional[OrchestrationWorkerPoolConfig] = None
+# ) -> Any: # 실제로는 QueueWorkerPool 또는 다른 풀 타입을 반환
+#     """
+#     지정된 이름과 타입의 Worker Pool 싱글톤 인스턴스를 가져옵니다.
+#     첫 호출 시 설정을 기반으로 인스턴스를 생성합니다.
+#     """
+#     global _worker_pools
+#     pool_key = f"{name}_{pool_type.value}" # 이름과 타입을 합쳐서 고유 키 생성
 
-    if pool_key not in _worker_pools:
-        with _worker_pool_lock:
-            # Lock 확보 후 다시 확인 (Double-Checked Locking)
-            if pool_key not in _worker_pools:
-                logger.info(f"Initializing Worker Pool instance: Name='{name}', Type='{pool_type.value}'")
+#     if pool_key not in _worker_pools:
+#         with _worker_pool_lock:
+#             # Lock 확보 후 다시 확인 (Double-Checked Locking)
+#             if pool_key not in _worker_pools:
+#                 logger.info(f"Initializing Worker Pool instance: Name='{name}', Type='{pool_type.value}'")
 
-                # 설정(config)이 주어지지 않으면 기본 설정 사용
-                pool_config = config or OrchestrationWorkerPoolConfig(
-                    workers=settings.WORKER_COUNT, # settings.py 에서 워커 수 가져오기
-                    max_concurrent_tasks=settings.MAX_CONCURRENT_TASKS # settings.py 에서 동시 작업 수 가져오기
-                    # 다른 필요한 설정들을 settings 에서 가져와서 OrchestrationWorkerPoolConfig 생성 시 전달
-                )
+#                 # 설정(config)이 주어지지 않으면 기본 설정 사용
+#                 pool_config = config or OrchestrationWorkerPoolConfig(
+#                     workers=settings.WORKER_COUNT, # settings.py 에서 워커 수 가져오기
+#                     max_concurrent_tasks=settings.MAX_CONCURRENT_TASKS # settings.py 에서 동시 작업 수 가져오기
+#                     # 다른 필요한 설정들을 settings 에서 가져와서 OrchestrationWorkerPoolConfig 생성 시 전달
+#                 )
 
-                # 풀 타입에 따라 적절한 클래스 인스턴스 생성
-                if pool_type == WorkerPoolType.QUEUE_ASYNCIO:
-                    # QueueWorkerPool 클래스를 사용하여 인스턴스 생성
-                    _worker_pools[pool_key] = QueueWorkerPool(name=name, config=pool_config)
-                # elif pool_type == WorkerPoolType.THREAD_POOL:
-                #     # 다른 타입의 워커 풀 클래스가 있다면 여기서 처리
-                #     # _worker_pools[pool_key] = ThreadWorkerPool(name=name, config=pool_config)
-                else:
-                    # 지원하지 않는 타입이면 오류 발생
-                    error_msg = f"Unsupported WorkerPoolType: {pool_type}"
-                    logger.error(error_msg)
-                    raise ValueError(error_msg)
+#                 # 풀 타입에 따라 적절한 클래스 인스턴스 생성
+#                 if pool_type == WorkerPoolType.QUEUE_ASYNCIO:
+#                     # QueueWorkerPool 클래스를 사용하여 인스턴스 생성
+#                     _worker_pools[pool_key] = QueueWorkerPool(name=name, config=pool_config)
+#                 # elif pool_type == WorkerPoolType.THREAD_POOL:
+#                 #     # 다른 타입의 워커 풀 클래스가 있다면 여기서 처리
+#                 #     # _worker_pools[pool_key] = ThreadWorkerPool(name=name, config=pool_config)
+#                 else:
+#                     # 지원하지 않는 타입이면 오류 발생
+#                     error_msg = f"Unsupported WorkerPoolType: {pool_type}"
+#                     logger.error(error_msg)
+#                     raise ValueError(error_msg)
 
-                logger.info(f"Worker Pool instance '{pool_key}' created.")
+#                 logger.info(f"Worker Pool instance '{pool_key}' created.")
 
-    # 저장된 인스턴스 반환
-    return _worker_pools[pool_key]
+#     # 저장된 인스턴스 반환
+#     return _worker_pools[pool_key]

@@ -1,9 +1,8 @@
 import unittest
 import asyncio
-from unittest.mock import MagicMock, patch, AsyncMock
-import json
+from unittest.mock import patch, AsyncMock
 
-from src.tools.web_search import WebSearchTool, WebSearchInput
+from src.tools.web_search import WebSearchTool
 from src.tools.web_search_google import GoogleSearchTool
 from src.config.errors import ToolError
 

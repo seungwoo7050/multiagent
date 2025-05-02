@@ -1,9 +1,11 @@
-import functools
 import inspect
 import threading
-from typing import Any, Callable, Dict, Generic, List, Optional, Set, Type, TypeVar, Union, cast, get_type_hints
+from typing import (Any, Callable, Dict, Generic, List, Optional, Type,
+                    TypeVar, cast)
+
 from src.config.logger import get_logger
-from src.config.metrics import get_metrics_manager, REGISTRY_OPERATION_DURATION
+from src.config.metrics import REGISTRY_OPERATION_DURATION, get_metrics_manager
+from src.utils.timing import get_current_time_ms
 
 logger = get_logger(__name__)
 metrics_manager = get_metrics_manager()

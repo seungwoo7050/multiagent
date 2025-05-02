@@ -114,11 +114,9 @@ Provides structured logging with context propagation.
 import json
 import logging
 import sys
-import time
-import threading
 import uuid
 from datetime import datetime, timezone
-from typing import Optional, Dict, Union, Any, Set
+from typing import Optional, Set
 
 # Import settings directly to avoid circular imports
 # This works because we're not creating a settings instance here

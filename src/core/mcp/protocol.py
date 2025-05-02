@@ -1,6 +1,8 @@
 import abc
-from typing import Any, Dict, Union
+from typing import Any, Dict
+
 from pydantic import BaseModel
+
 
 class ContextProtocol(abc.ABC, BaseModel):
     version: str = '1.0.0'

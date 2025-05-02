@@ -1,6 +1,6 @@
-from typing import Optional
+from src.config.errors import ErrorCode, LLMError
 from src.config.logger import get_logger
-from src.config.errors import BaseError, ErrorCode, LLMError
+
 logger = get_logger(__name__)
 FALLBACK_IMMEDIATELY_CODES = {ErrorCode.AUTHENTICATION_ERROR, ErrorCode.AUTHORIZATION_ERROR, ErrorCode.LLM_PROVIDER_ERROR, ErrorCode.BAD_REQUEST, ErrorCode.LLM_CONTENT_FILTER, ErrorCode.LLM_CONTEXT_LIMIT, ErrorCode.LLM_TOKEN_LIMIT}
 

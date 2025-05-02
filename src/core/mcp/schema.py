@@ -1,9 +1,11 @@
-from typing import Any, Dict, Optional, cast
-from pydantic import Field, Json
-import json
 import time
+from typing import Any, Dict, Optional, cast
+
+from pydantic import Field
+
 from src.core.mcp.protocol import ContextProtocol
 from src.utils.ids import generate_uuid
+
 
 class BaseContextSchema(ContextProtocol):
     context_id: str = Field(default_factory=generate_uuid, description='Unique identifier for this context instance')

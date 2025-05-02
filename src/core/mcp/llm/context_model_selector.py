@@ -1,10 +1,11 @@
 import asyncio
-from typing import Dict, Optional, Any, List, Type
+from typing import List, Optional
+
+from src.config.logger import get_logger
+from src.config.settings import get_settings
 from src.core.mcp.protocol import ContextProtocol
 from src.core.mcp.schema import BaseContextSchema, TaskContext
 from src.llm.models import list_available_models
-from src.config.logger import get_logger
-from src.config.settings import get_settings
 
 settings = get_settings()
 logger = get_logger(__name__)

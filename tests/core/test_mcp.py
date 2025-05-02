@@ -1,14 +1,10 @@
 import pytest
 import time
-import asyncio
 import json
-import zlib
 import statistics
-from typing import Dict, Any, Callable
 from packaging import version
 import unittest.mock
 
-from src.core.mcp.protocol import ContextProtocol
 from src.core.mcp.schema import BaseContextSchema, TaskContext
 from src.core.mcp.serialization import serialize_context, deserialize_context
 from src.core.mcp.compression import compress_context, decompress_context, optimize_context_data
@@ -270,7 +266,7 @@ class TestCompression:
         large_compressed = compress_context(large_data)
         
         # Calculate compression ratios
-        small_ratio = len(small_compressed) / len(json.dumps(small_data).encode('utf-8'))
+        len(small_compressed) / len(json.dumps(small_data).encode('utf-8'))
         medium_ratio = len(medium_compressed) / len(json.dumps(medium_data).encode('utf-8'))
         large_ratio = len(large_compressed) / len(json.dumps(large_data).encode('utf-8'))
         
@@ -433,7 +429,6 @@ class TestAdapter:
     async def test_adapter_with_async_component(self):
         """Test adapter with an async component."""
         # Import asyncio at the module level is now fixed, so this should work
-        from src.core.mcp.adapter_base import MCPAdapterBase
         
         # Remaining test code...
         # Create component and adapter
@@ -564,7 +559,7 @@ class TestIntegration:
         data = {"id": "test", "value": "A" * 1000}
         
         # Execute compression
-        compressed = compress_context(data)
+        compress_context(data)
         
         # Verify metrics were recorded by checking the mock directly
         assert mock_metrics_manager.track_memory.call_count >= 1
@@ -613,7 +608,7 @@ class TestPerformance:
         avg_deserialization = statistics.mean(deserialization_times) * 1000
         
         # Log results
-        print(f"\nPerformance Test Results:")
+        print("\nPerformance Test Results:")
         print(f"Serialization: {avg_serialization:.3f}ms (min: {min(serialization_times)*1000:.3f}ms, max: {max(serialization_times)*1000:.3f}ms)")
         print(f"Deserialization: {avg_deserialization:.3f}ms (min: {min(deserialization_times)*1000:.3f}ms, max: {max(deserialization_times)*1000:.3f}ms)")
         
@@ -651,7 +646,7 @@ class TestPerformance:
         avg_decompression = statistics.mean(decompression_times) * 1000
         
         # Log results
-        print(f"\nCompression Performance Results:")
+        print("\nCompression Performance Results:")
         print(f"Compression: {avg_compression:.3f}ms (min: {min(compression_times)*1000:.3f}ms, max: {max(compression_times)*1000:.3f}ms)")
         print(f"Decompression: {avg_decompression:.3f}ms (min: {min(decompression_times)*1000:.3f}ms, max: {max(decompression_times)*1000:.3f}ms)")
         print(f"Original size: {len(json.dumps(context_data).encode('utf-8'))} bytes")

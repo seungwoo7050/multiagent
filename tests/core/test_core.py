@@ -1,8 +1,6 @@
 import asyncio
 import pytest
 import time
-from unittest.mock import MagicMock, patch
-from typing import Dict, Any, List, Set, Optional
 
 from src.core.agent import (
     BaseAgent, AgentConfig, AgentContext, AgentState, 
@@ -10,21 +8,16 @@ from src.core.agent import (
 )
 from src.core.circuit_breaker import (
     CircuitBreaker, CircuitBreakerConfig, CircuitState, 
-    CircuitOpenError, with_circuit_breaker
-)
-from src.core.exceptions import (
-    CoreError, TaskError, AgentError, CircuitBreakerError
+    with_circuit_breaker
 )
 from src.core.registry import (
-    Registry, FunctionRegistry, ClassRegistry,
-    get_registry, get_function_registry, get_class_registry
+    Registry, get_function_registry, get_class_registry
 )
 from src.core.task import (
-    BaseTask, TaskState, TaskPriority, TaskFactory, TaskResult
+    BaseTask, TaskState, TaskPriority, TaskFactory
 )
 from src.core.worker_pool import (
-    WorkerPoolType, QueueWorkerPool, ThreadWorkerPool,
-    ProcessWorkerPool, get_worker_pool
+    WorkerPoolType, get_worker_pool
 )
 
 def _square_for_test(x):

@@ -5,18 +5,15 @@ Supports multiple vector database backends with optimized performance.
 import json
 import time
 import uuid
-from typing import Any, Dict, List, Optional, Set, Tuple, Union, cast
+from typing import Any, Dict, List, Optional, Tuple
 
-import numpy as np
-import aiohttp
 from src.config.connections import get_connection_manager
 from src.config.errors import ErrorCode, MemoryError, convert_exception
 from src.config.logger import get_logger
-from src.config.metrics import get_metrics_manager, MEMORY_METRICS
+from src.config.metrics import MEMORY_METRICS, get_metrics_manager
 from src.config.settings import get_settings
 from src.memory.base import BaseVectorStore
 from src.memory.utils import generate_vector_key
-from src.utils.timing import async_timed
 
 logger = get_logger(__name__)
 metrics = get_metrics_manager()
@@ -285,7 +282,7 @@ class VectorStore(BaseVectorStore):
             logger.debug('Generating MOCK embedding using hash function (for dev/testing).')
             import hashlib
             import struct
-            
+
             # Use MD5 hash of text to generate reproducible mock embedding
             hash_bytes = hashlib.md5(text.encode('utf-8')).digest()
             num_floats = len(hash_bytes) // 4
@@ -410,7 +407,7 @@ class VectorStore(BaseVectorStore):
         try:
             # Use NumPy for efficient vector operations
             import numpy as np
-            
+
             # Convert query to numpy array
             query_np = np.array(query_vector, dtype=np.float32)
             

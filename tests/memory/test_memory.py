@@ -5,16 +5,12 @@ These tests verify the functionality of the memory storage and vector store syst
 Run with pytest: 
     python -m pytest tests/memory/test_memory.py -v
 """
-import asyncio
-import json
 import os
 import pytest
 import time
-from typing import Any, Dict, List, Optional, Tuple
-from unittest.mock import AsyncMock, MagicMock, patch, call
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from src.config.settings import get_settings
-from src.config.metrics import get_metrics_manager
 from src.memory.base import BaseMemory, BaseVectorStore
 from src.memory.manager import MemoryManager
 from src.memory.redis_memory import RedisMemory

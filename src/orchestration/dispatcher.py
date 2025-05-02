@@ -1,25 +1,28 @@
 import asyncio
-import functools
-import time
 import random
-from typing import Any, Dict, Optional, List, Tuple, cast, Coroutine
+import time
+from typing import Any, Dict, Optional, Tuple, cast
 
-from src.orchestration.task_queue import BaseTaskQueue, RedisStreamTaskQueue
-from src.orchestration.load_balancer import BaseLoadBalancerStrategy, RoundRobinStrategy
-from src.orchestration.scheduler import PriorityScheduler, get_scheduler
-from src.orchestration.orchestration_worker_pool import QueueWorkerPool
-from src.core.worker_pool import get_worker_pool, WorkerPoolType
-from src.orchestration.flow_control import RedisRateLimiter, get_flow_controller, BackpressureRejectedError
-from src.core.task import BaseTask, TaskFactory, TaskState, TaskPriority
-from src.config.logger import get_logger, get_logger_with_context, ContextLoggerAdapter
-from src.config.settings import get_settings
-from src.config.metrics import get_metrics_manager
-from src.config.errors import BaseError, ErrorCode, TaskError, convert_exception, RETRYABLE_ERRORS
 from src.agents.factory import get_agent_factory
-from src.core.agent import AgentContext, AgentResult, BaseAgent
-from src.core.exceptions import AgentExecutionError, AgentNotFoundError, TaskExecutionError, AgentCreationError
-from src.llm.retry import is_retryable_error, calculate_backoff
-from src.memory.utils import AsyncLock
+from src.config.errors import (RETRYABLE_ERRORS, BaseError, ErrorCode,
+                               TaskError, convert_exception)
+from src.config.logger import ContextLoggerAdapter, get_logger_with_context
+from src.config.metrics import get_metrics_manager
+from src.config.settings import get_settings
+from src.core.agent import AgentContext, AgentResult
+from src.core.exceptions import (AgentCreationError, AgentExecutionError,
+                                 AgentNotFoundError)
+from src.core.task import BaseTask, TaskPriority
+from src.core.worker_pool import WorkerPoolType, get_worker_pool
+from src.llm.retry import calculate_backoff, is_retryable_error
+from src.orchestration.flow_control import (BackpressureRejectedError,
+                                            RedisRateLimiter,
+                                            get_flow_controller)
+from src.orchestration.load_balancer import (BaseLoadBalancerStrategy,
+                                             RoundRobinStrategy)
+from src.orchestration.orchestration_worker_pool import QueueWorkerPool
+from src.orchestration.scheduler import PriorityScheduler, get_scheduler
+from src.orchestration.task_queue import BaseTaskQueue, RedisStreamTaskQueue
 
 logger: ContextLoggerAdapter = get_logger_with_context(__name__)
 settings = get_settings()
@@ -252,9 +255,9 @@ class Dispatcher:
                     context_logger.error(f'CRITICAL: Failed to acknowledge successfully processed original message {original_message_id}! Potential for duplicate processing.')
             else:
                 # Handle agent failure
-                error_detail = agent_result.error or {'message': f"Agent execution failed without specific error details."}
+                error_detail = agent_result.error or {'message': "Agent execution failed without specific error details."}
                 raise AgentExecutionError(
-                    message=f"Agent execution failed", 
+                    message="Agent execution failed", 
                     agent_type=agent_type, 
                     agent_id=agent_result.metadata.get('agent_id', 'unknown'), 
                     details=error_detail
@@ -636,7 +639,7 @@ class Dispatcher:
                     
                 break
                 
-            except Exception as e:
+            except Exception:
                 processor_logger.exception('Unexpected error in processor loop. Continuing...')
                 
                 if acquired_semaphore:

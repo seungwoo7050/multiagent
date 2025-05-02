@@ -1,8 +1,10 @@
 import abc
 import asyncio
-from typing import Any, Dict, Optional, Type
-from src.core.mcp.protocol import ContextProtocol
+from typing import Any, Optional, Type
+
 from src.config.logger import get_logger
+from src.core.mcp.protocol import ContextProtocol
+
 logger = get_logger(__name__)
 
 class MCPAdapterBase(abc.ABC):

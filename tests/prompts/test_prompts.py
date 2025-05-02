@@ -1,9 +1,7 @@
 import pytest
-import asyncio
 import json
-import os
 from pathlib import Path
-from unittest.mock import patch, mock_open
+from unittest.mock import patch
 
 # Import the modules to be tested
 import src.prompts.templates as templates

@@ -2,14 +2,13 @@ import abc
 import asyncio
 import json
 import time
-from typing import Any, Dict, Optional, Union, TypeVar, Generic, List, Tuple, cast
-import hashlib
-from functools import lru_cache
-from src.config.settings import get_settings
-from src.config.logger import get_logger
-from src.config.metrics import get_metrics_manager, CACHE_METRICS, MEMORY_METRICS
-from src.config.errors import MemoryError, ErrorCode
+from typing import Any, Dict, Generic, Optional, TypeVar, Union, cast
+
 from src.config.connections import get_connection_manager
+from src.config.errors import ErrorCode, MemoryError
+from src.config.logger import get_logger
+from src.config.metrics import MEMORY_METRICS, get_metrics_manager
+from src.config.settings import get_settings
 
 settings = get_settings()
 logger = get_logger(__name__)
@@ -106,7 +105,7 @@ class TwoLevelCache(LLMCache[T]):
         try:
             async with connection_manager.redis_async_connection() as redis:
                 redis_key = self._get_redis_key(key)
-                start_time = time.time()
+                time.time()
                 serialized = await redis.get(redis_key)
                 if serialized is not None:
                     value: T = self.deserializer(serialized)

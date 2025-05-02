@@ -1,6 +1,3 @@
-# src/api/app.py
-
-import asyncio
 import contextlib
 import json
 import os
@@ -8,14 +5,29 @@ import sys
 import time
 import traceback
 from pathlib import Path
-from typing import Any, AsyncGenerator, Dict, List, Optional, cast
+from typing import Any, AsyncGenerator, Dict, List
 
 import uvicorn
-from fastapi import FastAPI, HTTPException, Request, Response, status
+from fastapi import FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+
+from src.agents.config import AgentConfig
+from src.agents.factory import get_agent_factory
+from src.config.connections import (cleanup_connection_pools,
+                                    setup_connection_pools)
+# --- Core Application Component Imports ---
+from src.config.errors import ERROR_TO_HTTP_STATUS, BaseError, ErrorCode
+from src.core.worker_pool import get_worker_pool
+from src.llm import initialize_llm_module
+from src.memory.manager import get_memory_manager
+from src.orchestration.orchestration_worker_pool import WorkerPoolType
+from src.orchestration.orchestrator import \
+    get_orchestrator  # Import the core orchestrator getter
+from src.orchestration.scheduler import get_scheduler
+from src.tools.registry import get_registry as get_tool_registry
 
 # --- Project Root Setup ---
 # Ensure the project root is in the Python path
@@ -25,10 +37,10 @@ if project_root not in sys.path:
 
 # --- Initial Configuration and Logging (Must happen BEFORE other imports) ---
 try:
-    from src.config.settings import get_settings
     from src.config.logger import get_logger, setup_logging
-    # from src.config import initialize_config # initialize_config might be redundant if setup_logging covers all
+    from src.config.settings import get_settings
 
+    # from src.config import initialize_config # initialize_config might be redundant if setup_logging covers all
     # Initialize settings and logging FIRST
     settings = get_settings()
     # Configure logging based on settings BEFORE initializing other modules that log
@@ -48,7 +60,8 @@ logger = get_logger(__name__)
 # --- Conditional MCP Middleware Import ---
 # Attempt to import MCP middleware, handle potential errors gracefully
 try:
-    from src.core.mcp.api.serialization_middleware import MCPSerializationMiddleware
+    from src.core.mcp.api.serialization_middleware import \
+        MCPSerializationMiddleware
     logger.info("MCPSerializationMiddleware imported successfully.")
 except ImportError as e:
     logger.error(f'Could not import MCPSerializationMiddleware: {e}. MCP Middleware will not be active.')
@@ -57,23 +70,10 @@ except Exception as e:
     logger.error(f'Unexpected error importing MCPSerializationMiddleware: {e}', exc_info=True)
     MCPSerializationMiddleware = None
 
-# --- Core Application Component Imports ---
-from src.config.errors import BaseError, ErrorCode, ERROR_TO_HTTP_STATUS
-from src.agents.config import AgentConfig
-from src.agents.factory import get_agent_factory
-from src.tools.registry import get_registry as get_tool_registry
-from src.memory.manager import get_memory_manager
-from src.orchestration.task_queue import BaseTaskQueue # Import base type
-from src.orchestration.scheduler import get_scheduler
-from src.orchestration.orchestration_worker_pool import get_worker_pool, QueueWorkerPool, WorkerPoolType
-from src.orchestration.orchestrator import get_orchestrator # Import the core orchestrator getter
-from src.config.connections import setup_connection_pools, cleanup_connection_pools
-from src.llm import initialize_llm_module
 
 # --- Tool Imports for Registration ---
 # Explicitly import tool modules to trigger registration via decorators on startup
 try:
-    from src.tools import calculator, datetime_tool, web_search, web_search_google
     logger.info("Tool modules imported successfully for registration.")
 except ImportError as e:
     logger.warning(f"Could not import all tool modules, some tools might not be registered: {e}")
@@ -155,7 +155,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             else:
                 logger.error(f"Agent configuration file not found: {config_file_path}. Cannot register agents from file.")
                 # Consider raising an error to halt startup if configs are critical
-                # raise RuntimeError(f"Agent configuration file not found: {config_file_path}")
+                raise FileNotFoundError(f"Agent configuration file not found: {config_file_path}")
 
             logger.info(f"Agent registration finished. Registered: {registered_agent_count}, Failed: {len(failed_configs)}")
             if failed_configs:
@@ -163,6 +163,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
         except Exception as e:
             logger.error(f"Error during Agent Registration phase: {e}", exc_info=True)
+            
 
         # Tool Registration (Triggered by imports at top, verified here)
         try:
@@ -174,6 +175,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                 from src.tools.datetime_tool import DateTimeTool
                 from src.tools.web_search import WebSearchTool
                 from src.tools.web_search_google import GoogleSearchTool
+
                 # 추가적인 도구 클래스가 있다면 여기에 import 하세요
 
                 tools_to_register = [
@@ -247,7 +249,8 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
                 elif name == "Task Queue":
                     # RedisStreamTaskQueue를 직접 생성하는 방식으로 변경
                     try:
-                        from src.orchestration.task_queue import RedisStreamTaskQueue
+                        from src.orchestration.task_queue import \
+                            RedisStreamTaskQueue
                         instance = RedisStreamTaskQueue(
                             stream_name=getattr(settings, 'TASK_QUEUE_STREAM_NAME', 'task_stream'),
                             consumer_group=getattr(settings, 'TASK_QUEUE_GROUP_NAME', 'orchestration_group')

@@ -1,11 +1,12 @@
 import abc
 import inspect
-from typing import Any, Awaitable, Callable, Dict, Optional, Tuple, Type, Union
+from typing import Any, Awaitable, Callable, Dict, Optional, Tuple, Type
+
 from pydantic import BaseModel, ValidationError, create_model
-from src.config.errors import ErrorCode, ToolError, convert_exception
+
+from src.config.errors import ErrorCode, ToolError
 from src.config.logger import get_logger
 from src.config.metrics import TOOL_METRICS, timed_metric
-from src.utils.timing import Timer, AsyncTimer
 
 logger = get_logger(__name__)
 
@@ -16,29 +17,24 @@ class BaseTool(abc.ABC):
     @abc.abstractmethod
     def name(self) -> str:
         """Get the name of the tool."""
-        pass
 
     @property
     @abc.abstractmethod
     def description(self) -> str:
         """Get the description of the tool."""
-        pass
 
     @property
     @abc.abstractmethod
     def args_schema(self) -> Type[BaseModel]:
         """Get the pydantic schema for the tool's arguments."""
-        pass
 
     @abc.abstractmethod
     def _run(self, **kwargs: Any) -> Any:
         """Synchronous execution of the tool."""
-        pass
 
     @abc.abstractmethod
     async def _arun(self, **kwargs: Any) -> Any:
         """Asynchronous execution of the tool."""
-        pass
 
     @timed_metric(TOOL_METRICS['duration'], {'tool_name': lambda self: self.name})
     def run(self, **kwargs: Any) -> Any:

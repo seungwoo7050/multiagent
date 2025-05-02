@@ -1,11 +1,12 @@
 import asyncio
-from typing import Any, Dict, Optional, Type
+from typing import Any, Dict, Optional
+
+from src.config.errors import ErrorCode, LLMError
 from src.config.logger import get_logger
 from src.config.settings import get_settings
-from src.llm.base import BaseLLMAdapter
 from src.llm.adapters import get_adapter as get_llm_adapter_instance
-from src.llm.models import get_model_info, list_available_models
-from src.config.errors import LLMError, ErrorCode
+from src.llm.base import BaseLLMAdapter
+from src.llm.models import get_model_info
 
 settings = get_settings()
 logger = get_logger(__name__)

@@ -19,7 +19,8 @@ def register_backends(vector_store_class):
     """
     # Register ChromaDB backend if available
     try:
-        from src.memory.backends.chroma import store_vector, search_vectors, delete_vectors
+        from src.memory.backends.chroma import (delete_vectors, search_vectors,
+                                                store_vector)
         vector_store_class._store_vector_chroma = store_vector
         vector_store_class._search_vectors_chroma = search_vectors
         vector_store_class._delete_vectors_chroma = delete_vectors
@@ -29,7 +30,8 @@ def register_backends(vector_store_class):
     
     # Register Qdrant backend if available
     try:
-        from src.memory.backends.qdrant import store_vector, search_vectors, delete_vectors
+        from src.memory.backends.qdrant import (delete_vectors, search_vectors,
+                                                store_vector)
         vector_store_class._store_vector_qdrant = store_vector
         vector_store_class._search_vectors_qdrant = search_vectors
         vector_store_class._delete_vectors_qdrant = delete_vectors
@@ -39,7 +41,8 @@ def register_backends(vector_store_class):
     
     # Register FAISS backend if available
     try:
-        from src.memory.backends.faiss import store_vector, search_vectors, delete_vectors
+        from src.memory.backends.faiss import (delete_vectors, search_vectors,
+                                               store_vector)
         vector_store_class._store_vector_faiss = store_vector
         vector_store_class._search_vectors_faiss = search_vectors
         vector_store_class._delete_vectors_faiss = delete_vectors

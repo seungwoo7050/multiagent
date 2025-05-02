@@ -1,13 +1,14 @@
-import json
+import asyncio
 import time
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Union
 
 import aiohttp
-from src.llm.base import BaseLLMAdapter
-from src.llm.connection_pool import get_connection_pool
+
+from src.config.errors import ErrorCode, LLMError
 from src.config.logger import get_logger
 from src.config.settings import get_settings
-from src.config.errors import LLMError, ErrorCode
+from src.llm.base import BaseLLMAdapter
+from src.llm.connection_pool import get_connection_pool
 from src.utils.timing import async_timed
 
 settings = get_settings()
@@ -406,7 +407,8 @@ class GeminiAdapter(BaseLLMAdapter):
                 
         # Try to get limit from models registry
         try:
-            from src.llm.models import get_token_limit as get_token_limit_from_models
+            from src.llm.models import \
+                get_token_limit as get_token_limit_from_models
             limit_from_models = get_token_limit_from_models(self.model)
             if limit_from_models != 4096:
                 logger.debug(f"Using token limit {limit_from_models} from models.py for Gemini model '{self.model}'.")

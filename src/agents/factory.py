@@ -1,12 +1,14 @@
 import asyncio
-from typing import Any, Dict, Optional, Type, Union, cast, List
-from src.config.logger import get_logger
-from src.config.metrics import get_metrics_manager, AGENT_METRICS
+from typing import Any, Dict, List, Optional, Type
+
 from src.agents.config import AgentConfig
-from src.core.agent import BaseAgent
-from src.agents.mcp_planner import MCPPlannerAgent
 from src.agents.mcp_executor import MCPExecutorAgent
-from src.core.exceptions import AgentExecutionError, AgentCreationError, AgentNotFoundError
+from src.agents.mcp_planner import MCPPlannerAgent
+from src.config.logger import get_logger
+from src.config.metrics import get_metrics_manager
+from src.core.agent import BaseAgent
+from src.core.exceptions import (AgentCreationError, AgentExecutionError,
+                                 AgentNotFoundError)
 from src.utils.timing import async_timed, get_current_time_ms
 
 logger = get_logger(__name__)
@@ -152,7 +154,8 @@ class AgentFactory:
             # Special case for executor agent - inject tool registry
             if agent_type == 'mcp_executor':
                 try:
-                    from src.tools.registry import get_registry as get_tool_registry
+                    from src.tools.registry import \
+                        get_registry as get_tool_registry
                     constructor_args['tool_registry'] = get_tool_registry('global_tools')
                     logger.debug(f"Injecting tool_registry into {agent_type} '{agent_name}'")
                 except ImportError:

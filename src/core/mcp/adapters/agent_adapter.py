@@ -1,11 +1,12 @@
 from typing import Any, Dict, Optional, Type, cast
-from src.core.mcp.protocol import ContextProtocol
-from src.core.mcp.adapter_base import MCPAdapterBase
-from src.core.mcp.schema import BaseContextSchema, TaskContext
-from src.core.agent import BaseAgent, AgentContext as CoreAgentContext, AgentResult
+
 from src.config.logger import get_logger
-from src.core.exceptions import SerializationError, AgentError, TaskError
-from src.core.mcp.adapters.task_adapter import TaskAdapter
+from src.core.agent import AgentContext as CoreAgentContext
+from src.core.agent import BaseAgent
+from src.core.exceptions import SerializationError
+from src.core.mcp.adapter_base import MCPAdapterBase
+from src.core.mcp.protocol import ContextProtocol
+from src.core.mcp.schema import BaseContextSchema, TaskContext
 
 logger = get_logger(__name__)
 

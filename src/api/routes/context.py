@@ -1,16 +1,16 @@
 # src/api/routes/context.py
-from typing import Any, Dict, Optional, List, cast
-from fastapi import APIRouter, Depends, HTTPException, status, Body, Path, Request # Added Request
-from pydantic import BaseModel # Added BaseModel
+from typing import Any, Dict, List, Optional, cast
 
+from fastapi import (APIRouter, Body, Depends, HTTPException,  # Added Request
+                     Path, Request, status)
+from pydantic import BaseModel  # Added BaseModel
+
+# Import the MemoryManager dependency
+from src.api.dependencies import get_memory_manager_dependency
 from src.config.logger import get_logger
 # MCP Imports (assuming these exist based on roadmap)
 from src.core.mcp.protocol import ContextProtocol
 from src.core.mcp.schema import BaseContextSchema
-from src.core.mcp.serialization import deserialize_context, SerializationError, SerializationFormat
-from src.config.errors import NotFoundError, BaseError, ErrorCode, APIError # Adjusted imports
-# Import the MemoryManager dependency
-from src.api.dependencies import MemoryManagerDep, get_memory_manager_dependency
 from src.memory.manager import MemoryManager
 
 logger = get_logger(__name__)

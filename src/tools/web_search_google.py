@@ -1,14 +1,15 @@
-import aiohttp
-import json
 import hashlib
+import json
 import time
-from typing import Any, Dict, List, Optional, Union
-from pydantic import BaseModel, Field, field_validator
+from typing import Any, Dict, List, Optional
 
+import aiohttp
+from pydantic import BaseModel
+
+from src.config.connections import get_connection_manager
 from src.config.errors import ErrorCode, ToolError
 from src.config.logger import get_logger
 from src.config.metrics import get_metrics_manager
-from src.config.connections import get_connection_manager
 from src.config.settings import get_settings
 from src.tools.base import BaseTool
 from src.tools.registry import register_tool
@@ -280,7 +281,7 @@ class GoogleSearchTool(BaseTool):
         
         try:
             redis = await conn_manager.get_redis_async_connection()
-            start_time = time.time()
+            time.time()
             cached_data_bytes: Optional[bytes] = await redis.get(cache_key)
             
             if cached_data_bytes:

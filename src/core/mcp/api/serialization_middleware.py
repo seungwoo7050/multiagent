@@ -1,17 +1,27 @@
-from fastapi import Request, Response, HTTPException, status
-from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
-from starlette.types import ASGIApp
-import time
-import json
 import asyncio
-import sys, os
+import json
+import os
+import sys
+import time
+from typing import Optional
+
+from fastapi import Request, Response, status
+from starlette.middleware.base import (BaseHTTPMiddleware,
+                                       RequestResponseEndpoint)
+from starlette.types import ASGIApp
+
+from src.config.logger import get_logger
+from src.core.mcp.protocol import ContextProtocol
+from src.core.mcp.serialization import (SerializationError,
+                                        SerializationFormat,
+                                        deserialize_context)
+from src.core.mcp.versioning import (check_version_compatibility,
+                                     get_latest_supported_version)
+
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
-from src.config.logger import get_logger
-from src.core.mcp.serialization import deserialize_context, SerializationFormat, SerializationError
-from src.core.mcp.protocol import ContextProtocol
-from src.core.mcp.versioning import check_version_compatibility, get_latest_supported_version
+
 logger = get_logger(__name__)
 MCP_SERIALIZATION_FORMAT_MAP = {'application/msgpack': SerializationFormat.MSGPACK, 'application/x-msgpack': SerializationFormat.MSGPACK, 'application/json+mcp': SerializationFormat.JSON}
 MCP_VERSION_HEADER = 'X-MCP-Version'

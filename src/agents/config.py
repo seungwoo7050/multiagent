@@ -1,7 +1,9 @@
-from enum import Enum
 from typing import Any, Dict, List, Optional, Set, Union
-from pydantic import BaseModel, Field, field_validator, ConfigDict
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
 from src.core.agent import AgentCapability
+
 
 class AgentConfig(BaseModel):
     name: str

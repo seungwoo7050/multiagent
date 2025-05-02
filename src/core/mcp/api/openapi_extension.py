@@ -1,8 +1,12 @@
-from typing import Dict, Type, List, Any
+from typing import Any, Dict, List, Type
+
 from fastapi import FastAPI
 from pydantic import BaseModel
-from src.core.mcp.schema import BaseContextSchema, TaskContext, LLMInputContext, LLMOutputContext
+
 from src.config.logger import get_logger
+from src.core.mcp.schema import (BaseContextSchema, LLMInputContext,
+                                 LLMOutputContext, TaskContext)
+
 logger = get_logger(__name__)
 
 def get_mcp_context_schemas() -> List[Type[BaseModel]]:
@@ -25,6 +29,3 @@ def customize_openapi_for_mcp(app: FastAPI) -> None:
         return openapi_schema
     app.openapi = custom_openapi
     logger.info('Custom OpenAPI generation function for MCP applied to FastAPI app.')
-from typing import List, Type
-from pydantic import BaseModel
-from fastapi import FastAPI

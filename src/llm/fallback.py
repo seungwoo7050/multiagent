@@ -8,16 +8,16 @@ when the primary model encounters an error.
 
 import asyncio
 import time
-from typing import Any, Dict, List, Optional, Tuple, Union, cast
+from typing import Any, Dict, List, Optional, Tuple, Union
 
-from src.config.logger import get_logger_with_context, ContextLoggerAdapter
-from src.config.settings import get_settings
-from src.llm.base import BaseLLMAdapter
-from src.llm.adapters import get_adapter as get_llm_adapter_instance
-from src.llm.selector import select_models
-from src.llm.failure_detector import should_fallback_immediately
-from src.config.errors import LLMError, ErrorCode
+from src.config.errors import ErrorCode, LLMError
+from src.config.logger import ContextLoggerAdapter, get_logger_with_context
 from src.config.metrics import get_metrics_manager
+from src.config.settings import get_settings
+from src.llm.adapters import get_adapter as get_llm_adapter_instance
+from src.llm.base import BaseLLMAdapter
+from src.llm.failure_detector import should_fallback_immediately
+from src.llm.selector import select_models
 
 metrics = get_metrics_manager()
 settings = get_settings()

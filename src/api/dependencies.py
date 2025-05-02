@@ -1,15 +1,18 @@
 # src/api/dependencies.py
-from fastapi import HTTPException, status, Depends
-from typing import Annotated, Optional, Any, cast
-import asyncio
+from typing import Annotated, cast
 
-# Orchestrator and its dependencies
-from src.orchestration.orchestrator import get_orchestrator, Orchestrator
-from src.orchestration.task_queue import BaseTaskQueue, RedisStreamTaskQueue # Assuming RedisStreamTaskQueue is used
-from src.memory.manager import MemoryManager, get_memory_manager
-from src.orchestration.orchestration_worker_pool import QueueWorkerPool, get_worker_pool, WorkerPoolType
+from fastapi import Depends, HTTPException, status
+
 from src.config.logger import get_logger
 from src.config.settings import get_settings
+from src.core.worker_pool import get_worker_pool
+from src.memory.manager import MemoryManager, get_memory_manager
+from src.orchestration.orchestration_worker_pool import (QueueWorkerPool,
+                                                         WorkerPoolType)
+# Orchestrator and its dependencies
+from src.orchestration.orchestrator import Orchestrator, get_orchestrator
+from src.orchestration.task_queue import \
+    BaseTaskQueue  # Assuming RedisStreamTaskQueue is used
 
 settings = get_settings()
 logger = get_logger(__name__)
@@ -37,7 +40,8 @@ async def get_task_queue_dependency() -> BaseTaskQueue:
     try:
         # Replace with the actual function to get your configured queue instance
         # For Redis Streams:
-        from src.orchestration.task_queue import RedisStreamTaskQueue # Re-import locally if needed
+        from src.orchestration.task_queue import \
+            RedisStreamTaskQueue  # Re-import locally if needed
         queue = RedisStreamTaskQueue(
             stream_name=getattr(settings, 'TASK_QUEUE_STREAM_NAME', 'task_stream'),
             consumer_group=getattr(settings, 'TASK_QUEUE_GROUP_NAME', 'orchestration_group')

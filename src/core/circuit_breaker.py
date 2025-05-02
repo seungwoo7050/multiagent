@@ -1,11 +1,12 @@
 import asyncio
 import enum
-import time
-from typing import Any, Callable, Dict, List, Optional, Set, Tuple, Type, TypeVar, Union, cast
+from typing import Any, Callable, Dict, List, Optional, Tuple, TypeVar
+
 from pydantic import BaseModel, Field, field_validator
+
 from src.config.logger import get_logger
-from src.config.metrics import get_metrics_manager
 from src.utils.timing import get_current_time_ms
+
 logger = get_logger(__name__)
 T = TypeVar('T')
 R = TypeVar('R')
@@ -28,13 +29,13 @@ class CircuitBreakerConfig(BaseModel):
     @field_validator('failure_threshold', 'success_threshold', 'max_concurrent_requests')
     def validate_thresholds(cls, v, values):
         if v <= 0:
-            raise ValueError(f"Threshold values must be positive")
+            raise ValueError("Threshold values must be positive")
         return v
     
     @field_validator('reset_timeout_ms', 'failure_window_ms')
     def validate_timeouts(cls, v, values):
         if v <= 0:
-            raise ValueError(f"Timeout values must be positive")
+            raise ValueError("Timeout values must be positive")
         return v
 
 class CircuitBreakerMetrics(BaseModel):
@@ -116,7 +117,6 @@ class CircuitBreaker:
                     if self._state == CircuitState.OPEN:
                         logger.info(f'Circuit {self.name} reset timeout reached. Transitioning to HALF_OPEN.')
                         await self._transition_to(CircuitState.HALF_OPEN)
-                        self.metrics.current_concurrent_requests = 1
                         self.metrics.max_observed_concurrency = max(self.metrics.max_observed_concurrency, self.metrics.current_concurrent_requests)
                         return True
             return False

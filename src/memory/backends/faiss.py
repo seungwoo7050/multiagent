@@ -31,7 +31,7 @@ async def store_vector(vector_store, vector_id: str, vector: List[float], metada
     try:
         import faiss
         import numpy as np
-        
+
         # Initialize FAISS storage if needed
         if not hasattr(vector_store, '_faiss_indexes'):
             vector_store._faiss_indexes = {}
@@ -112,7 +112,7 @@ async def search_vectors(vector_store, query_vector: List[float], k: int, collec
     try:
         import faiss
         import numpy as np
-        
+
         # Check if index exists
         if not hasattr(vector_store, '_faiss_indexes') or collection not in vector_store._faiss_indexes:
             logger.warning(f"FAISS index for collection '{collection}' not found")
@@ -197,7 +197,7 @@ async def delete_vectors(vector_store, ids: Optional[List[str]], collection: str
     try:
         import faiss
         import numpy as np
-        
+
         # Check if index exists
         if not hasattr(vector_store, '_faiss_indexes') or collection not in vector_store._faiss_indexes:
             logger.warning(f"FAISS index for collection '{collection}' not found")

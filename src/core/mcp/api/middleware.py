@@ -1,14 +1,19 @@
-from fastapi import Request, Response, HTTPException, status
-from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
-from starlette.types import ASGIApp
-import time
 import json
-import sys, os
+import os
+import sys
+import time
+
+from fastapi import HTTPException, Request, Response, status
+from starlette.middleware.base import (BaseHTTPMiddleware,
+                                       RequestResponseEndpoint)
+from starlette.types import ASGIApp
+
+from src.config.logger import get_logger
+
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
-from src.config.logger import get_logger
-from src.core.mcp.serialization import SerializationFormat
+
 logger = get_logger(__name__)
 MCP_CONTENT_TYPES = {'application/msgpack', 'application/x-msgpack', 'application/json+mcp'}
 MCP_VERSION_HEADER = 'X-MCP-Version'
@@ -23,13 +28,11 @@ class BasicMCPMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         start_time = time.time()
         request_id = request.headers.get('X-Request-ID', 'N/A')
-        is_potential_mcp_request = False
         request_content_type = request.headers.get('content-type', '').lower()
-        request_accept_header = request.headers.get('accept', '').lower()
+        request.headers.get('accept', '').lower()
         mcp_version = request.headers.get(MCP_VERSION_HEADER)
         mcp_context_type_req = request.headers.get(MCP_CONTEXT_TYPE_HEADER)
         if any((ct in request_content_type for ct in MCP_CONTENT_TYPES)) or mcp_version:
-            is_potential_mcp_request = True
             logger.debug(f'Request {request.url.path} (ID: {request_id}) potentially contains MCP context. Content-Type: {request_content_type}, MCP-Version: {mcp_version}, MCP-Context-Type: {mcp_context_type_req}')
         response: Response
         try:

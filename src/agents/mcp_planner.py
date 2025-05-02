@@ -1,17 +1,18 @@
 import json
 import re
-from typing import Any, Dict, Optional, cast, List
-from src.core.agent import BaseAgent, AgentContext as CoreAgentContext, AgentResult, AgentState
+from typing import Any, Dict, Optional
+
 from src.agents.config import AgentConfig
 from src.agents.context_manager import AgentContextManager
-from src.core.mcp.protocol import ContextProtocol
-from src.core.mcp.schema import TaskContext, BaseContextSchema
-from src.core.mcp.adapters.llm_adapter import LLMInputContext, LLMOutputContext, LLMAdapter
-from src.config.logger import get_logger_with_context, ContextLoggerAdapter
-from src.core.exceptions import AgentExecutionError, TaskError
-from src.prompts.templates import PromptTemplate
-from src.config.settings import get_settings
 from src.config.errors import LLMError
+from src.config.logger import ContextLoggerAdapter, get_logger_with_context
+from src.config.settings import get_settings
+from src.core.agent import AgentContext as CoreAgentContext
+from src.core.agent import AgentResult, AgentState, BaseAgent
+from src.core.exceptions import AgentExecutionError, TaskError
+from src.core.mcp.adapters.llm_adapter import (LLMAdapter, LLMInputContext,
+                                               LLMOutputContext)
+from src.core.mcp.schema import TaskContext
 from src.core.task import TaskResult  # Added missing import
 
 # Get settings instance
@@ -69,7 +70,8 @@ class MCPPlannerAgent(BaseAgent):
             raise AgentExecutionError(f'Prompt template rendering error: {e}', agent_type=self.config.agent_type, agent_id=self.config.name)
         
         llm_input_context = LLMInputContext(
-            model=self.config.model or settings.PRIMARY_LLM, 
+            model=self.config.model or settings.PRIMARY_LLM,
+            prompt=planning_prompt,
             messages=[{'role': 'user', 'content': planning_prompt}], 
             parameters={
                 'max_tokens': self.config.parameters.get('max_tokens', 1500), 

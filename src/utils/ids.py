@@ -2,10 +2,11 @@ import hashlib
 import os
 import random
 import string
+import threading
 import time
 import uuid
-import threading
-from typing import Optional, Union, Dict
+from typing import Optional, Union
+
 from src.config.logger import get_logger
 
 logger = get_logger(__name__)

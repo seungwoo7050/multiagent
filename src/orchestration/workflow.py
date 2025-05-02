@@ -1,17 +1,16 @@
 import asyncio
-import os
 import time
 from enum import Enum
-from typing import Any, Dict, List, Optional, Union, Type, cast
+from typing import Any, Dict, List, Optional
 
-from pydantic import BaseModel, Field, field_validator, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
+from src.config.errors import OrchestrationError
+from src.config.logger import ContextLoggerAdapter, get_logger_with_context
+from src.config.metrics import get_metrics_manager
+from src.core.exceptions import ErrorCode
 from src.core.task import BaseTask, TaskState
 from src.memory.manager import MemoryManager
-from src.config.logger import get_logger_with_context, ContextLoggerAdapter
-from src.config.errors import OrchestrationError
-from src.core.exceptions import ErrorCode
-from src.config.metrics import get_metrics_manager
 
 # Initialize logger and metrics manager
 logger: ContextLoggerAdapter = get_logger_with_context(__name__)
@@ -254,6 +253,8 @@ class WorkflowEngine:
         Returns:
             Optional[WorkflowState]: Updated workflow state or None on failure
         """
+        global logger
+        logger = get_logger_with_context(__name__, task_id=task_id)
         state = await self.load_workflow_state(task_id)
         if not state or not 0 <= step_index < len(state.plan):
             logger.error(
@@ -262,8 +263,6 @@ class WorkflowEngine:
             )
             return None
             
-        global logger
-        logger = get_logger_with_context(__name__, task_id=task_id)
         
         step = state.plan[step_index]
         

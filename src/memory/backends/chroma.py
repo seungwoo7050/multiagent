@@ -27,8 +27,7 @@ async def store_vector(vector_store, vector_id: str, vector: List[float], metada
     """
     try:
         import chromadb
-        from chromadb.utils import embedding_functions
-        
+
         # Get or create client
         if not hasattr(vector_store, '_chroma_client'):
             if vector_store.api_url:
@@ -88,7 +87,7 @@ async def search_vectors(vector_store, query_vector: List[float], k: int, collec
     """
     try:
         import chromadb
-        
+
         # Get client
         if not hasattr(vector_store, '_chroma_client'):
             if vector_store.api_url:
@@ -160,7 +159,7 @@ async def delete_vectors(vector_store, ids: Optional[List[str]], collection: str
     """
     try:
         import chromadb
-        
+
         # Get client
         if not hasattr(vector_store, '_chroma_client'):
             if vector_store.api_url:

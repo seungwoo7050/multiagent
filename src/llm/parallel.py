@@ -1,14 +1,16 @@
 import asyncio
 import time
-from typing import Any, Callable, Dict, List, Optional, Tuple, TypeVar, Union, cast, Coroutine
-from functools import wraps
+from typing import (Any, Callable, Coroutine, Dict, List, Optional, Set, Tuple,
+                    TypeVar, Union, cast)
+
+from src.config.errors import ErrorCode, LLMError
+from src.config.logger import get_logger
+from src.config.metrics import MEMORY_METRICS, get_metrics_manager
+from src.config.settings import get_settings
+from src.core.mcp.llm.context_transform import transform_llm_input_for_model
 from src.llm.adapters import get_adapter
 from src.llm.base import BaseLLMAdapter
-from src.core.mcp.llm.context_transform import transform_llm_input_for_model
-from src.config.logger import get_logger
-from src.config.settings import get_settings
-from src.config.metrics import get_metrics_manager, MEMORY_METRICS, LLM_METRICS
-from src.config.errors import LLMError, ErrorCode
+from src.llm.failure_detector import should_fallback_immediately
 
 settings = get_settings()
 logger = get_logger(__name__)

@@ -1,20 +1,24 @@
 import asyncio
 import concurrent.futures
 import functools
-import multiprocessing, multiprocessing.context
+import multiprocessing
+import multiprocessing.context
 import os
+import sys
 import threading
 import time
-import sys
-from collections import deque
 from enum import Enum
-from typing import Any, Callable, Dict, List, Optional, Set, Tuple, TypeVar, Union, cast, Coroutine
+from typing import (Any, Callable, Coroutine, Dict, List, Optional, Set, Tuple,
+                    TypeVar, Union, cast)
+
 from pydantic import BaseModel, Field, field_validator
+
 from src.config.logger import get_logger
-from src.config.metrics import get_metrics_manager, TASK_QUEUE_DEPTH, TASK_PROCESSING
+from src.config.metrics import get_metrics_manager
 from src.config.settings import get_settings
 from src.core.exceptions import WorkerPoolError
-from src.utils.timing import AsyncTimer, Timer, get_current_time_ms
+from src.utils.timing import get_current_time_ms
+
 logger = get_logger(__name__)
 settings = get_settings()
 metrics_manager = get_metrics_manager()
@@ -292,14 +296,14 @@ class ThreadWorkerPool:
                     final_results = []
                     for fut in asyncio_futures:
                         if fut.cancelled():
-                            final_results.append(TimeoutError(f'Async map item timed out or cancelled'))
+                            final_results.append(TimeoutError('Async map item timed out or cancelled'))
                         elif fut.done():
                             try:
                                 final_results.append(fut.result())
                             except Exception as e:
                                 final_results.append(e)
                         else:
-                            final_results.append(TimeoutError(f'Async map item did not complete'))
+                            final_results.append(TimeoutError('Async map item did not complete'))
                     return final_results
             else:
                 gathered_results: List[Union[R, BaseException]] = await asyncio.gather(*asyncio_futures, return_exceptions=True)
@@ -525,7 +529,7 @@ class ProcessWorkerPool:
             self._update_metrics(active_delta=-len(items))
             metrics_manager.track_task('processing', increment=False, value=len(items))
             completed_count = sum((1 for r in results if not isinstance(r, Exception)))
-            failed_count = len(results) - completed_count
+            len(results) - completed_count
 
     async def amap(self, func: Callable[[T], R], items: List[T], timeout: Optional[float]=None, chunksize: int=1) -> List[Union[R, Exception]]:
         loop: asyncio.AbstractEventLoop = asyncio.get_running_loop()
@@ -701,7 +705,7 @@ class QueueWorkerPool(BaseWorkerPool):
                     logger.debug(f'Worker {worker_name} completed task: {func_name}')
                 except Exception as e:
                     # Use common exception handler
-                    error_info = self._handle_task_exception(e, "queue", func_name)
+                    self._handle_task_exception(e, "queue", func_name)
                     success = False
                 finally:
                     execution_time_ms: int = get_current_time_ms() - task_start_time
@@ -889,9 +893,9 @@ async def get_worker_pool(name: str, pool_type: Union[WorkerPoolType, str]=Worke
         raise TypeError(f"Retrieved pool for '{key}' has incorrect type. Expected {expected_type.__name__}.")
     return pool_instance
 
-def get_default_worker_pool() -> 'QueueWorkerPool':
-    pool = get_worker_pool('default', WorkerPoolType.QUEUE_ASYNCIO)
-    return cast('QueueWorkerPool', pool)
+# async def get_default_worker_pool() -> 'QueueWorkerPool':
+#     pool = await get_worker_pool('default', WorkerPoolType.QUEUE_ASYNCIO)
+#     return cast('QueueWorkerPool', pool)
 
 async def shutdown_all_worker_pools(wait: bool=True, timeout: Optional[float]=None) -> None:
     logger.info(f'Initiating shutdown for all ({len(_worker_pools)}) registered worker pools...')

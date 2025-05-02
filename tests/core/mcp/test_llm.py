@@ -1,15 +1,11 @@
-import asyncio
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
-from typing import Dict, Any, List, Optional
 
-from src.core.mcp.protocol import ContextProtocol
 from src.core.mcp.schema import BaseContextSchema, TaskContext
 from src.core.mcp.llm.context_model_selector import ContextModelSelector
 from src.core.mcp.llm.context_performance import get_context_labels
 from src.core.mcp.llm.context_transform import transform_llm_input_for_model
 from src.core.mcp.llm.context_preserving_fallback import execute_mcp_llm_with_context_preserving_fallback
-from src.core.mcp.adapters.llm_adapter import LLMInputContext, LLMOutputContext
 from src.config.errors import LLMError, ErrorCode
 
 

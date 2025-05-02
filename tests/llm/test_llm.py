@@ -12,7 +12,6 @@ import time
 import asyncio
 import pytest
 from unittest import mock
-from typing import Dict, List, Any
 
 
 from src.llm.base import BaseLLMAdapter
@@ -342,7 +341,7 @@ class TestLLMCache:
     async def test_cache_hit_miss(self, llm_cache, openai_adapter, test_prompt):
         """Test cache hit and miss behavior."""
         # Await the fixtures to get the actual objects
-        cache = await llm_cache
+        await llm_cache
         adapter = await openai_adapter
         
         # Create a mock for the adapter's _generate_text method
@@ -598,7 +597,7 @@ class TestPerformance:
             avg_time = total_time / iterations
             
             # Log benchmark results
-            print(f"\nLatency benchmark results:")
+            print("\nLatency benchmark results:")
             print(f"Average request time: {avg_time:.4f}s")
             print(f"Requests per second: {iterations/total_time:.2f}")
             
@@ -634,7 +633,7 @@ class TestPerformance:
         l2_get_time = time.time() - start_time
         
         # Log performance results
-        print(f"\nCache performance results:")
+        print("\nCache performance results:")
         print(f"Set {num_items} items: {set_time:.4f}s ({num_items/set_time:.2f} ops/s)")
         print(f"Get from L1 cache: {l1_get_time:.4f}s ({(num_items//2)/l1_get_time:.2f} ops/s)")
         print(f"Get from L2 cache: {l2_get_time:.4f}s ({(num_items//2)/l2_get_time:.2f} ops/s)")

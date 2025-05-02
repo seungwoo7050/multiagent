@@ -1,15 +1,12 @@
 import pytest
 import asyncio
-import uuid
 import os
 from unittest.mock import AsyncMock, MagicMock, patch
-from typing import Dict, Any, Optional, cast, Union
 
-from src.core.mcp.protocol import ContextProtocol
 from src.core.mcp.schema import BaseContextSchema, TaskContext
 from src.core.mcp.adapters.agent_adapter import AgentAdapter, AgentInputContext, AgentOutputContext
-from src.core.mcp.adapters.llm_adapter import LLMAdapter, LLMInputContext, LLMOutputContext
-from src.core.mcp.adapters.memory_adapter import MemoryAdapter, MemoryInputContext, MemoryOutputContext
+from src.core.mcp.adapters.llm_adapter import LLMAdapter, LLMInputContext
+from src.core.mcp.adapters.memory_adapter import MemoryAdapter, MemoryInputContext
 from src.core.agent import BaseAgent, AgentResult, AgentContext
 from src.core.task import BaseTask, TaskState
 from src.memory.base import BaseMemory

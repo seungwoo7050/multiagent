@@ -1,12 +1,14 @@
-from typing import Any, Dict, Optional, Type, cast
-from pydantic import BaseModel, Field, ConfigDict
-from src.core.mcp.protocol import ContextProtocol
-from src.core.mcp.adapter_base import MCPAdapterBase
-from src.core.mcp.schema import BaseContextSchema, TaskContext
-from src.orchestration.orchestrator import Orchestrator
-from src.core.task import BaseTask, TaskResult, TaskState
+from typing import Any, Dict, Optional, cast
+
+from pydantic import ConfigDict, Field
+
 from src.config.logger import get_logger
 from src.core.exceptions import SerializationError
+from src.core.mcp.adapter_base import MCPAdapterBase
+from src.core.mcp.protocol import ContextProtocol
+from src.core.mcp.schema import BaseContextSchema
+from src.core.task import TaskResult
+from src.orchestration.orchestrator import Orchestrator
 
 logger = get_logger(__name__)
 

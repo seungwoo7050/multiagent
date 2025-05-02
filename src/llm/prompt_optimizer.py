@@ -1,8 +1,9 @@
 import re
-from typing import Any, Dict, List, Optional, Set, Tuple, Union
+from typing import Callable, Dict, List, Optional, Set
+
 from src.config.logger import get_logger
+from src.config.metrics import MEMORY_METRICS, get_metrics_manager
 from src.config.settings import get_settings
-from src.config.metrics import get_metrics_manager, MEMORY_METRICS
 from src.llm.tokenizer import count_tokens_sync
 
 metrics = get_metrics_manager()
@@ -104,7 +105,7 @@ def _trim_context(prompt: str, model: str, target_token_count: int, preserve_rec
             logger.debug('Added the last paragraph as recent context to essential list.')
         else:
             logger.debug('Last paragraph seems to be part of instructions, not added separately as recent context.')
-    essential_set = set(essential_paragraphs)
+    set(essential_paragraphs)
     all_indices = set(range(len(paragraphs)))
     remaining_indices = list(all_indices - instruction_para_indices)
     if recent_context_paragraph and len(paragraphs) - 1 in remaining_indices:

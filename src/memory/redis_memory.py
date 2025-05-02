@@ -3,18 +3,17 @@ Redis implementation of the memory storage system.
 Provides persistent storage of context data with TTL support.
 """
 import asyncio
-import random
 import time
-from typing import Any, Dict, List, Optional, Set, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from src.config.connections import get_connection_manager
-from src.config.errors import ErrorCode, MemoryError, ConnectionError, convert_exception
+from src.config.errors import ConnectionError, ErrorCode, convert_exception
 from src.config.logger import get_logger
-from src.config.metrics import get_metrics_manager, MEMORY_METRICS
+from src.config.metrics import MEMORY_METRICS, get_metrics_manager
 from src.config.settings import get_settings
 from src.memory.base import BaseMemory
-from src.memory.utils import AsyncLock, ExpirationPolicy, deserialize_data, generate_memory_key, serialize_data
-from src.utils.timing import async_timed
+from src.memory.utils import (AsyncLock, ExpirationPolicy, deserialize_data,
+                              generate_memory_key, serialize_data)
 
 logger = get_logger(__name__)
 metrics = get_metrics_manager()

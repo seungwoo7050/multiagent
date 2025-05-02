@@ -1,11 +1,11 @@
-import zlib
 import json
 import time
-from typing import Dict, Any
-from src.core.mcp.protocol import ContextProtocol
-from src.core.mcp.schema import BaseContextSchema
+import zlib
+from typing import Any, Dict
+
 from src.config.logger import get_logger
 from src.config.metrics import get_metrics_manager
+from src.core.mcp.protocol import ContextProtocol
 
 logger = get_logger(__name__)
 
@@ -73,7 +73,7 @@ def compress_context(context_data: Dict[str, Any]) -> bytes:
         if compressed_size < original_size:
             return compressed
         else:
-            logger.debug(f'Compression ineffective, using original data')
+            logger.debug('Compression ineffective, using original data')
             return json_data
         
     except TypeError as e:

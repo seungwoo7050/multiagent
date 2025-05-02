@@ -1,7 +1,8 @@
-from typing import List, Optional, Tuple, Dict, Any
-from src.config.settings import get_settings
+from typing import Any, Dict, List, Optional, Tuple
+
 from src.config.logger import get_logger
-from src.llm.models import list_available_models
+from src.config.settings import get_settings
+
 logger = get_logger(__name__)
 settings = get_settings()
 _available_models_cache: Optional[List[str]] = None

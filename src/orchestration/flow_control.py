@@ -1,17 +1,16 @@
 import asyncio
 import time
-import uuid
 from enum import Enum
-from typing import Any, Callable, Dict, List, Optional, Tuple, TypeVar, cast, Coroutine
+from typing import Any, Callable, Coroutine, Dict, Optional, TypeVar
 
 import redis.asyncio as aioredis
 from pydantic import BaseModel, Field, field_validator
 
-from src.config.logger import get_logger
-from src.config.settings import get_settings
 from src.config.connections import get_connection_manager
-from src.config.errors import ErrorCode, BaseError, convert_exception
+from src.config.errors import BaseError, ErrorCode, convert_exception
+from src.config.logger import get_logger
 from src.config.metrics import get_metrics_manager
+from src.config.settings import get_settings
 
 # Type variables for better type hinting
 T = TypeVar('T')
@@ -243,7 +242,6 @@ class RedisRateLimiter:
         """Release a permit (no-op for REJECT strategy)"""
         # No action needed for REJECT strategy
         # Would be implemented for other strategies like QUEUE
-        pass
 
     async def execute(self, func: Callable[..., Coroutine[Any, Any, R]], *args: Any, priority: int=0, cost: int=1, **kwargs: Any) -> Optional[R]:
         """
@@ -288,7 +286,6 @@ class RedisRateLimiter:
 
 class BackpressureRejectedError(Exception):
     """Raised when a request is rejected by the backpressure controller"""
-    pass
 
 # Global registry of flow controllers
 _flow_controllers: Dict[str, RedisRateLimiter] = {}

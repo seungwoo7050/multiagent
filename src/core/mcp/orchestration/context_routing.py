@@ -1,8 +1,11 @@
-from typing import Dict, Any, Optional, List, Type
-from pydantic import BaseModel, Field, ConfigDict
 import asyncio
-from src.core.mcp.protocol import ContextProtocol
+from typing import Any, Dict, List, Optional
+
+from pydantic import BaseModel, ConfigDict, Field
+
 from src.config.logger import get_logger
+from src.core.mcp.protocol import ContextProtocol
+
 logger = get_logger(__name__)
 
 class RoutingTarget(BaseModel):
@@ -27,7 +30,7 @@ class ContextRouter:
             return target
         logger.warning(f"No specific routing rule found for context type '{context_type_name}'. Cannot determine route.")
         return None
-from pydantic import BaseModel, Field, ConfigDict
+
 _router_instance: Optional[ContextRouter] = None
 _router_lock = asyncio.Lock()
 

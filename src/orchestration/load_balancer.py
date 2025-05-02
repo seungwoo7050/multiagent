@@ -1,6 +1,6 @@
 import abc
 import random
-from typing import List, Optional, Any, Dict
+from typing import Any, Dict, List, Optional
 
 from src.config.logger import get_logger
 from src.config.metrics import get_metrics_manager
@@ -26,7 +26,6 @@ class BaseLoadBalancerStrategy(abc.ABC):
         Returns:
             Any: Selected worker or None if no workers available
         """
-        pass
 
     def update_worker_status(self, worker_id: Any, status: Dict[str, Any]) -> None:
         """
@@ -36,7 +35,6 @@ class BaseLoadBalancerStrategy(abc.ABC):
             worker_id: Identifier for the worker
             status: Status information dictionary
         """
-        pass
 
 class RoundRobinStrategy(BaseLoadBalancerStrategy):
     """

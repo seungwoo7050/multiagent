@@ -1,11 +1,13 @@
 import asyncio
 import time
-from typing import Optional, Dict, Any, List, cast
-from src.core.queue_worker_pool import QueueWorkerPool, QueueWorkerPoolConfig, QueueWorkerPoolMetrics
-from src.core.worker_pool import get_worker_pool, WorkerPoolType, AnyWorkerPool, WorkerPoolConfig
+from typing import Optional, cast
+
 from src.config.logger import get_logger
-from src.config.settings import get_settings
 from src.config.metrics import get_metrics_manager
+from src.config.settings import get_settings
+from src.core.queue_worker_pool import (QueueWorkerPool, QueueWorkerPoolConfig,
+                                        QueueWorkerPoolMetrics)
+from src.core.worker_pool import WorkerPoolType, get_worker_pool
 
 metrics = get_metrics_manager()
 logger = get_logger(__name__)
@@ -69,7 +71,7 @@ class WorkerManager:
             except asyncio.CancelledError:
                 logger.info(f"Worker monitoring loop cancelled for pool '{self.worker_pool.name}'.")
                 break
-            except Exception as e:
+            except Exception:
                 logger.exception(f"Error in worker monitoring loop for pool '{self.worker_pool.name}'. Continuing...")
                 await asyncio.sleep(self.monitor_interval)
         logger.info(f"Worker monitoring loop finished for pool '{self.worker_pool.name}'.")

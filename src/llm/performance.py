@@ -1,11 +1,12 @@
-import time
 import asyncio
 from collections import deque
-from typing import Dict, Optional, Deque, Tuple, Any
-from pydantic import BaseModel, Field, ConfigDict
+from typing import Deque, Dict, Optional, Tuple
+
+from pydantic import BaseModel, ConfigDict, Field
+
 from src.config.logger import get_logger
-from src.config.settings import get_settings
 from src.config.metrics import get_metrics_manager
+from src.config.settings import get_settings
 from src.utils.timing import get_current_time_ms
 
 metrics = get_metrics_manager()
@@ -135,6 +136,3 @@ async def record_llm_failure(model: str, provider: str, error_type: str, latency
         await tracker.record_failure(model, provider, error_type, latency_ms, context_labels)
     except Exception as e:
         logger.error(f'Failed to record LLM failure metric for model {model}: {e}', exc_info=True)
-from collections import deque
-from pydantic import BaseModel, Field, ConfigDict
-import os

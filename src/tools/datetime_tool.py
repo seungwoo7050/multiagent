@@ -1,15 +1,16 @@
-import os
-import time
-import datetime
 import calendar
+import datetime
 import zoneinfo
 from enum import Enum
-from typing import Any, Dict, List, Optional, Set, Union, Literal, Type
+from typing import Any, Dict, Optional, Type
+
 from pydantic import BaseModel, Field, field_validator
+
 from src.config.errors import ErrorCode, ToolError
 from src.config.logger import get_logger
 from src.tools.base import BaseTool
 from src.tools.registry import register_tool
+
 logger = get_logger(__name__)
 
 class DateTimeOperation(str, Enum):
@@ -130,7 +131,6 @@ class DateTimeTool(BaseTool):
                     logger.debug(f"Parsed '{date_string}' as aware ISO, converted to {str(tz)}.")
             except ValueError:
                 logger.debug(f"Parsing '{date_string}' with fromisoformat failed. Trying strptime formats.")
-                pass
             if parsed_dt is None:
                 common_formats = ['%Y-%m-%d %H:%M:%S', '%Y-%m-%d %H:%M', '%Y-%m-%d', '%m/%d/%Y %H:%M:%S', '%m/%d/%Y %H:%M', '%m/%d/%Y', '%d/%m/%Y %H:%M:%S', '%d/%m/%Y %H:%M', '%d/%m/%Y', '%Y%m%d%H%M%S', '%Y%m%d%H%M', '%Y%m%d', '%b %d %Y %H:%M:%S', '%b %d %Y', '%B %d, %Y', '%d %B %Y']
                 for fmt in common_formats:

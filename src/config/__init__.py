@@ -2,8 +2,7 @@
 Multi-Agent Platform Configuration Package
 """
 
-import logging 
-from typing import Optional
+import logging
 
 # Set up a basic console logger for bootstrapping
 _bootstrap_logger = logging.getLogger("config.bootstrap")

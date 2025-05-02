@@ -1,20 +1,22 @@
 # src/api/routes/streaming.py
-import time
 import asyncio
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Depends, Path, HTTPException, status
-from typing import Annotated, Optional, Dict, Any
+import os
+import sys
+import time
+from typing import Annotated
 
-import sys, os
+from fastapi import APIRouter, Depends, Path, WebSocket, WebSocketDisconnect
+
+# Import Orchestrator or relevant event source dependency
+from src.api.dependencies import get_orchestrator_dependency_implementation
+from src.api.streaming import ConnectionManager, get_connection_manager
+from src.config.logger import get_logger
+from src.orchestration.orchestrator import \
+    Orchestrator  # Keep for type hinting
+
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..'))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
-
-from src.api.streaming import ConnectionManager, get_connection_manager
-from src.config.logger import get_logger
-# Import Orchestrator or relevant event source dependency
-from src.api.dependencies import OrchestratorDep, get_orchestrator_dependency_implementation
-from src.orchestration.orchestrator import Orchestrator # Keep for type hinting
-
 logger = get_logger(__name__)
 router = APIRouter(prefix='/ws/v1', tags=['Streaming'])
 
@@ -54,7 +56,7 @@ async def websocket_task_updates(
             if hasattr(orchestrator, 'subscribe_to_task_events') and asyncio.iscoroutinefunction(orchestrator.subscribe_to_task_events):
                  try:
                      async for update in orchestrator.subscribe_to_task_events(target_task_id):
-                         if update: # Ensure update is not None
+                        if update:
                             await manager.send_personal_message(update, websocket)
                  except Exception as sub_err:
                       logger.error(f"Error in task update subscription for {target_task_id}: {sub_err}", exc_info=True)
@@ -63,20 +65,6 @@ async def websocket_task_updates(
                      logger.info(f"Subscription ended for task {target_task_id}")
                      # Optionally send a final message indicating subscription end
                      await manager.send_personal_message({"status": "subscription_ended", "task_id": target_task_id}, websocket)
-
-            else:
-                logger.warning(f"Orchestrator does not have 'subscribe_to_task_events' async generator. Sending dummy updates for task {target_task_id}.")
-                # Fallback to dummy updates if subscription mechanism isn't available
-                update_count = 0
-                while True: # Keep sending dummy updates until disconnect
-                    update_count += 1
-                    await manager.send_personal_message({
-                        'task_id': target_task_id,
-                        'status': 'processing',
-                        'update': f'Dummy Update {update_count}',
-                        'timestamp': time.time()
-                    }, websocket)
-                    await asyncio.sleep(5) # Send dummy update every 5 seconds
 
         # --- Keepalive Task ---
         async def send_keepalive():
@@ -116,7 +104,7 @@ async def websocket_task_updates(
         # Attempt to send an error message before closing
         try:
             await websocket.send_json({"error": "An unexpected server error occurred."})
-        except:
+        except Exception:
             pass # Ignore errors during error reporting
     finally:
         # Ensure tasks are cancelled on exit

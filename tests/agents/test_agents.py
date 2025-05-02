@@ -6,20 +6,19 @@ import asyncio
 import json
 import pytest
 import time
-from typing import Any, Dict, List, Optional, Set, Type
+from typing import Any, Dict
 from unittest.mock import AsyncMock, MagicMock, patch, PropertyMock
 
 from src.agents.config import AgentConfig
 from src.agents.context_manager import AgentContextManager
-from src.agents.factory import AgentFactory, get_agent_factory
+from src.agents.factory import AgentFactory
 from src.agents.mcp_executor import MCPExecutorAgent
 from src.agents.mcp_planner import MCPPlannerAgent
-from src.core.agent import AgentCapability, AgentContext, AgentResult, AgentState, BaseAgent
-from src.core.exceptions import AgentExecutionError, AgentCreationError, AgentNotFoundError
-from src.core.mcp.adapters.llm_adapter import LLMInputContext, LLMOutputContext
-from src.core.mcp.protocol import ContextProtocol
-from src.core.mcp.schema import BaseContextSchema, TaskContext
-from src.core.task import BaseTask, TaskPriority, TaskResult, TaskState
+from src.core.agent import AgentContext, AgentState, BaseAgent
+from src.core.exceptions import AgentExecutionError
+from src.core.mcp.adapters.llm_adapter import LLMOutputContext
+from src.core.mcp.schema import TaskContext
+from src.core.task import BaseTask, TaskPriority, TaskState
 from src.tools.registry import ToolRegistry
 
 
@@ -555,7 +554,7 @@ class TestEndToEndFlow:
             
             # Measure execution time
             start_time = time.time()
-            result = await planner.process(agent_context)
+            await planner.process(agent_context)
             execution_time = time.time() - start_time
             
             # Execution should take some measurable time

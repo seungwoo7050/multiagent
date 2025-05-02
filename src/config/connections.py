@@ -5,16 +5,17 @@ Provides connection pooling and proper resource management.
 import asyncio
 import contextlib
 import threading
-from typing import Optional, Dict, Any, AsyncGenerator, Generator
+from typing import AsyncGenerator, Generator
 
+import aiohttp
 import redis
 import redis.asyncio as aioredis
-import aiohttp
-from src.config.settings import get_settings
+
+from src.config.errors import ConnectionError, ErrorCode
 from src.config.logger import get_logger
 # metrics.py 변경 사항 반영: get_metrics_manager와 MEMORY_METRICS 임포트
-from src.config.metrics import get_metrics_manager, MEMORY_METRICS
-from src.config.errors import ConnectionError, ErrorCode
+from src.config.metrics import MEMORY_METRICS, get_metrics_manager
+from src.config.settings import get_settings
 
 logger = get_logger(__name__)
 
