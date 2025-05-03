@@ -4,8 +4,8 @@ from fastapi import FastAPI
 from pydantic import BaseModel
 
 from src.config.logger import get_logger
-from src.core.mcp.schema import (BaseContextSchema, LLMInputContext,
-                                 LLMOutputContext, TaskContext)
+from src.core.mcp.schema import BaseContextSchema, TaskContext
+from src.core.mcp.adapters.llm_adapter import LLMInputContext, LLMOutputContext
 
 logger = get_logger(__name__)
 
