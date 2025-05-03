@@ -8,6 +8,7 @@ if [ $# -ne 1 ]; then
 fi
 
 TEST_PATH="$1"
+export RUN_BENCHMARKS=1
 
 # PYTHONPATH 설정
 export PYTHONPATH=.
@@ -15,5 +16,11 @@ export PYTHONPATH=.
 # 1) 콘솔에 실패한 테스트와 트레이스백만 출력
 pytest -qq --disable-warnings -rN "$TEST_PATH"
 
-# 2) 같은 결과를 ~/Desktop/pytest_log.txt 파일로 저장
-pytest -qq --disable-warnings -rN "$TEST_PATH" > ~/Desktop/pytest_log.txt
+# # 2) 같은 결과를 ~/Desktop/pytest_log.txt 파일로 저장
+pytest -qq --disable-warnings -rN "$TEST_PATH" > ~/Desktop/pytestlog.txt
+
+# 3) skipped reason
+# pytest -q -r s "$TEST_PATH"  > ~/Desktop/pytestlog.txt
+
+# 4)
+# pytest -q --benchmark-only "$TEST_PATH" > ~/Desktop/pytestlog.txt

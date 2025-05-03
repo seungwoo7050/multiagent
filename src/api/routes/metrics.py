@@ -10,10 +10,6 @@ from fastapi.responses import PlainTextResponse
 from src.config.logger import get_logger
 from src.config.metrics import get_metrics_manager
 
-project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..'))
-if project_root not in sys.path:
-    sys.path.insert(0, project_root)
-
 # Prometheus 클라이언트 라이브러리 import 시도
 try:
     from prometheus_client import (CONTENT_TYPE_LATEST, REGISTRY,

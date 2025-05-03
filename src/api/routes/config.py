@@ -10,11 +10,6 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from src.config.logger import get_logger
 from src.config.settings import Settings, get_settings
 
-project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..'))
-if project_root not in sys.path:
-    sys.path.insert(0, project_root)
-
-
 logger = get_logger(__name__)
 
 # APIRouter 인스턴스 생성

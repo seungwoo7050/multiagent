@@ -272,6 +272,12 @@ class MetricsManager:
             return
             
         metric = LLM_METRICS[metric_name]
+        if metric is None:
+            logger.warning(f"Unknown LLM metric: {metric_name}")
+            return
+        
+        allowed = getattr(metric, '_labelnames', [])
+        labels = {k: v for k, v in labels.items() if k in allowed}
         
         if isinstance(metric, Histogram):
             value = labels.pop('value', 0)

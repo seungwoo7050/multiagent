@@ -12,6 +12,7 @@ import time
 import asyncio
 import pytest
 from unittest import mock
+from unittest.mock import AsyncMock
 
 
 from src.llm.base import BaseLLMAdapter
@@ -30,6 +31,28 @@ from src.config.errors import LLMError
 from src.config.settings import get_settings
 
 settings = get_settings()
+
+@pytest.fixture(autouse=True)
+def mock_llm_requests(monkeypatch):
+    async def fake_generate(self, prompt, **kwargs):
+        return {
+            "choices": [
+                {
+                    "text": "fake response",
+                    "index": 0,
+                    "finish_reason": "stop"
+                }
+            ],
+            "usage": {
+                "prompt_tokens": 1,
+                "completion_tokens": 1,
+                "total_tokens": 2
+            }
+        }
+
+    monkeypatch.setattr(OpenAIAdapter,    "_generate_text", fake_generate)
+    monkeypatch.setattr(AnthropicAdapter, "_generate_text", fake_generate)
+    monkeypatch.setattr(GeminiAdapter,    "_generate_text", fake_generate)
 
 # Test helpers
 async def fake_success_operation():
@@ -135,10 +158,6 @@ class TestLLMAdapters:
         assert gemini_adapter.provider == "gemini"
 
     @pytest.mark.asyncio
-    @pytest.mark.skipif(
-        not os.getenv("OPENAI_API_KEY"),
-        reason="No OpenAI API key available."
-    )
     async def test_openai_text_generation(self, openai_adapter, test_prompt):
         """Test OpenAI text generation with a basic prompt."""
         response = await openai_adapter.generate(prompt=test_prompt)
@@ -152,10 +171,6 @@ class TestLLMAdapters:
         assert response["usage"]["completion_tokens"] > 0
 
     @pytest.mark.asyncio
-    @pytest.mark.skipif(
-        not os.getenv("ANTHROPIC_API_KEY"),
-        reason="No Anthropic API key available."
-    )
     async def test_anthropic_text_generation(self, anthropic_adapter, test_prompt):
         """Test Anthropic text generation with a basic prompt."""
         response = await anthropic_adapter.generate(prompt=test_prompt)
@@ -169,10 +184,6 @@ class TestLLMAdapters:
         assert response["usage"]["completion_tokens"] > 0
 
     @pytest.mark.asyncio
-    @pytest.mark.skipif(
-        not os.getenv("GEMINI_API_KEY"),
-        reason="No Gemini API key available."
-    )
     async def test_gemini_text_generation(self, gemini_adapter, test_prompt):
         """Test Gemini text generation with a basic prompt."""
         response = await gemini_adapter.generate(prompt=test_prompt)
@@ -186,10 +197,6 @@ class TestLLMAdapters:
         assert response["usage"]["completion_tokens"] > 0
 
     @pytest.mark.asyncio
-    @pytest.mark.skipif(
-        not os.getenv("OPENAI_API_KEY"),
-        reason="No OpenAI API key available."
-    )
     async def test_adapter_chat_messages(self, openai_adapter, test_messages):
         """Test adapter handling of chat message formats."""
         response = await openai_adapter.generate(prompt=test_messages)
@@ -202,7 +209,7 @@ class TestLLMAdapters:
     @pytest.mark.asyncio
     async def test_adapter_health_check(self, openai_adapter):
         """Test adapter health check functionality."""
-        adapter = await openai_adapter
+        adapter = openai_adapter
         health_status = await adapter.health_check()
         
         assert "status" in health_status
@@ -296,7 +303,7 @@ class TestLLMFallbackAndParallel:
     @pytest.mark.asyncio
     async def test_race_models_mocked(self):
         """Test racing multiple models with mocked adapters."""
-        # Create mocks for different model adapters
+        # 빠른(fast) 모델 모킹
         fast_mock = mock.MagicMock(spec=BaseLLMAdapter)
         fast_mock.model = "gpt-3.5-turbo"
         fast_mock.provider = "openai"
@@ -304,33 +311,32 @@ class TestLLMFallbackAndParallel:
             "choices": [{"text": "Fast model response"}],
             "usage": {"prompt_tokens": 10, "completion_tokens": 5}
         }
-        
+
+        # 느린(slow) 모델 모킹: 진짜 0.5초 await 후 반환
         slow_mock = mock.MagicMock(spec=BaseLLMAdapter)
         slow_mock.model = "gpt-4o"
         slow_mock.provider = "openai"
-        slow_mock.generate.side_effect = lambda **kwargs: asyncio.sleep(0.5) and {
-            "choices": [{"text": "Slow model response"}],
-            "usage": {"prompt_tokens": 10, "completion_tokens": 15}
-        }
-        
-        # Patch adapter creation
+        async def slow_generate(**kwargs):
+            await asyncio.sleep(0.5)
+            return {
+                "choices": [{"text": "Slow model response"}],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 15}
+            }
+        slow_mock.generate.side_effect = slow_generate
+
+        # 어댑터 동시 생성 패치
         with mock.patch("src.llm.parallel._create_adapters_concurrently") as mock_create:
-            mock_create.return_value = {"gpt-3.5-turbo": fast_mock, "gpt-4o": slow_mock}
-            # Return different adapters based on model name
-            def side_effect(model, **kwargs):
-                if model == "gpt-3.5-turbo":
-                    return fast_mock
-                else:
-                    return slow_mock
-            
-            # Test race_models
+            mock_create.return_value = {
+                "gpt-3.5-turbo": fast_mock,
+                "gpt-4o": slow_mock
+            }
+
             winner, response = await race_models(
                 models=["gpt-3.5-turbo", "gpt-4o"],
                 prompt="Test prompt",
                 timeout=1.0
             )
-            
-            # Verify the fast model won
+
             assert winner == "gpt-3.5-turbo"
             assert response["choices"][0]["text"] == "Fast model response"
 
@@ -341,11 +347,11 @@ class TestLLMCache:
     async def test_cache_hit_miss(self, llm_cache, openai_adapter, test_prompt):
         """Test cache hit and miss behavior."""
         # Await the fixtures to get the actual objects
-        await llm_cache
-        adapter = await openai_adapter
+        llm_cache
+        adapter = openai_adapter
         
         # Create a mock for the adapter's _generate_text method
-        with mock.patch.object(adapter, '_generate_text') as mock_generate:
+        with mock.patch.object(type(adapter), '_generate_text', new_callable=AsyncMock) as mock_generate:
             mock_generate.return_value = {
                 "choices": [{"text": "Test response"}],
                 "usage": {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8}
@@ -380,7 +386,7 @@ class TestLLMCache:
     async def test_cache_ttl(self, llm_cache):
         """Test cache TTL functionality."""
         # Await the fixture to get the actual cache object
-        cache = await llm_cache
+        cache = llm_cache
         
         # Add an item with a short TTL
         test_key = "ttl_test_key"
@@ -405,7 +411,7 @@ class TestLLMCache:
     async def test_cache_clear(self, llm_cache):
         """Test cache clearing functionality."""
         # Await the fixture to get the actual cache object
-        cache = await llm_cache
+        cache = llm_cache
         
         # Add some items to the cache
         await cache.set("key1", {"value": 1})
@@ -575,7 +581,7 @@ class TestPerformance:
     async def test_latency_benchmark(self, openai_adapter):
         """Benchmark LLM request latency."""
         # Await the fixture to get the actual adapter
-        adapter = await openai_adapter
+        adapter = openai_adapter
         
         with mock.patch.object(adapter, '_generate_text') as mock_generate:
             mock_generate.return_value = {
@@ -608,7 +614,7 @@ class TestPerformance:
     async def test_cache_performance(self, llm_cache):
         """Benchmark cache performance."""
         # Await the fixture to get the actual cache object
-        cache = await llm_cache
+        cache = llm_cache
         
         # Generate test data
         num_items = 1000

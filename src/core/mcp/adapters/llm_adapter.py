@@ -12,10 +12,9 @@ from src.core.mcp.adapter_base import MCPAdapterBase
 from src.core.mcp.llm.context_performance import get_context_labels
 from src.core.mcp.protocol import ContextProtocol
 from src.core.mcp.schema import BaseContextSchema
-from src.llm import get_adapter as get_llm_adapter_instance
 from src.llm.base import BaseLLMAdapter
-from src.llm.parallel import execute_with_fallbacks
-from src.llm.selector import select_models
+import src.llm as llm
+import src.llm.selector as selector
 
 settings = get_settings()
 logger = get_logger(__name__)
@@ -51,7 +50,7 @@ class LLMAdapter(MCPAdapterBase):
         else:
             logger.debug(f'Dynamically getting LLM adapter instance for model {model_name}')
             try:
-                adapter_instance = get_llm_adapter_instance(model_name)
+                adapter_instance = llm.get_adapter(model_name)
                 if not isinstance(adapter_instance, BaseLLMAdapter):
                     raise TypeError(f'Factory returned unexpected type {type(adapter_instance)} for model {model_name}')
                 await adapter_instance.ensure_initialized()
@@ -96,8 +95,11 @@ class LLMAdapter(MCPAdapterBase):
         if isinstance(component_output, Exception):
             success = False
             error_message = str(component_output)
-            if isinstance(component_output, LLMError) and component_output.model:
-                model_used = model_used or component_output.model
+            # LLMError 인 경우 model 속성이 있으면 덮어쓰기
+            if isinstance(component_output, LLMError):
+                model_attr = getattr(component_output, 'model', None)
+                if model_attr:
+                    model_used = model_attr
             logger.error(f'LLM component execution failed: {error_message}')
         elif isinstance(component_output, dict):
             llm_result: Dict[str, Any] = cast(Dict[str, Any], component_output)
@@ -125,46 +127,99 @@ class LLMAdapter(MCPAdapterBase):
             logger.error(f'Error adapting LLM output dict to LLMOutputContext: {e}', exc_info=True)
             raise SerializationError(f'Could not adapt LLM output to MCP context: {e}', original_error=e)
         
-    def _track_llm_metrics(self, model: str, result_data: Dict[str, Any], 
-                     duration: float, context_labels: Dict[str, str],
-                     should_track_metrics: bool = True) -> None:
+    async def _track_llm_metrics(
+        self,
+        model: str,
+        result_data: Dict[str, Any],
+        duration: float,
+        context_labels: Dict[str, str],
+        should_track_metrics: bool = True
+    ) -> None:
         """Track metrics for successful LLM request."""
         if not should_track_metrics or not model:
             return
-            
+
+        # 어댑터 레벨 방어막: context_labels 제거
+        context_labels = {}
+
+        # provider 결정 (unknown 모델도 안전 처리)
         provider = settings.LLM_MODEL_PROVIDER_MAP.get(model, 'unknown')
+
+        # 토큰 사용량 정보
         usage = result_data.get('usage', {})
         prompt_tokens = usage.get('prompt_tokens', 0)
         completion_tokens = usage.get('completion_tokens', 0)
-        
-        # Track successful request count
-        metrics.track_llm('requests', model=model, provider=provider, **context_labels)
-        # Track request duration
-        metrics.track_llm('duration', value=duration, model=model, provider=provider, **context_labels)
-        # Track token usage (prompt)
-        if prompt_tokens > 0:
-            metrics.track_llm('tokens', value=prompt_tokens, model=model, 
-                            provider=provider, type='prompt', **context_labels)
-        # Track token usage (completion)
-        if completion_tokens > 0:
-            metrics.track_llm('tokens', value=completion_tokens, model=model, 
-                            provider=provider, type='completion', **context_labels)
 
-    def _track_llm_error(self, model: str, error_code: Union[ErrorCode, str], 
-                    context_labels: Dict[str, str],
-                    should_track_metrics: bool = True) -> None:
+        # 1) 성공 요청 수 카운트
+        metrics.track_llm(
+            'requests',
+            model=model,
+            provider=provider
+        )
+
+        # 2) 요청 처리 시간 기록
+        metrics.track_llm(
+            'duration',
+            value=duration,
+            model=model,
+            provider=provider
+        )
+
+        # 3) 프롬프트 토큰 사용량
+        if prompt_tokens > 0:
+            metrics.track_llm(
+                'tokens',
+                value=prompt_tokens,
+                model=model,
+                provider=provider,
+                type='prompt'
+            )
+
+        # 4) 컴플리션 토큰 사용량
+        if completion_tokens > 0:
+            metrics.track_llm(
+                'tokens',
+                value=completion_tokens,
+                model=model,
+                provider=provider,
+                type='completion'
+            )
+
+
+    def _track_llm_error(
+        self,
+        model: str,
+        error_code: Union[ErrorCode, str],
+        context_labels: Dict[str, str],
+        should_track_metrics: bool = True
+    ) -> None:
         """Track metrics for failed LLM request."""
         if not should_track_metrics:
             return
-            
+
+        # 어댑터 레벨 방어막: context_labels 제거
+        context_labels = {}
+
+        # provider 결정
         provider = settings.LLM_MODEL_PROVIDER_MAP.get(model, 'unknown')
-        error_type = error_code.value if isinstance(error_code, ErrorCode) else str(error_code)
-        metrics.track_llm('errors', model=model, provider=provider, 
-                        error_type=error_type, **context_labels)
+        # 에러 코드 문자열화
+        error_type = (
+            error_code.value
+            if isinstance(error_code, ErrorCode)
+            else str(error_code)
+        )
+
+        # 에러 카운트 기록
+        metrics.track_llm(
+            'errors',
+            model=model,
+            provider=provider,
+            error_type=error_type
+        )
 
     async def _select_models(self, requested_model: str) -> Tuple[str, List[str]]:
         """Select primary and fallback models to use."""
-        return await select_models(
+        return await selector.select_models(
             requested_model=requested_model,
             task_context=None
         )
@@ -175,20 +230,13 @@ class LLMAdapter(MCPAdapterBase):
         fallback_models: List[str],
         call_args: Dict[str, Any]
     ) -> Tuple[str, Dict[str, Any]]:
-        """Execute LLM request with fallbacks."""
-        logger.debug(f"Executing LLM call via execute_with_fallbacks (Primary: '{primary_model}', Fallbacks: {fallback_models})")
-        
-        return await execute_with_fallbacks(
-            primary_model=primary_model,
-            fallback_models=fallback_models,
-            prompt=call_args['prompt'],
-            max_tokens=call_args.get('max_tokens'),
-            temperature=call_args.get('temperature'),
-            top_p=call_args.get('top_p'),
-            additional_params=call_args.get('additional_params'),
-            timeout=call_args.get('timeout'),
-            track_metrics=call_args.get('track_metrics', True)
-        )    
+        """Execute LLM request by fetching the adapter and calling its execute() method."""
+        logger.debug(f"Executing LLM call via provider.execute (Model: '{primary_model}')")
+        # 테스트에서 patch된 get_adapter → provider 를 가져와서 execute() 호출
+        adapter = await self._get_target_llm_adapter(primary_model)
+        result_data = await adapter.execute(call_args)
+        return primary_model, result_data
+
 
     async def process_with_mcp(self, context: ContextProtocol, **kwargs: Any) -> ContextProtocol:
         llm_result_data: Optional[Dict[str, Any]] = None
@@ -245,7 +293,7 @@ class LLMAdapter(MCPAdapterBase):
             # Track error metrics
             should_track_metrics_on_error = llm_input_context.metadata.get('track_metrics', True) if 'llm_input_context' in locals() else True
             if should_track_metrics_on_error:
-                self._track_llm_error(model_actually_used, lle.code or ErrorCode.UNKNOWN_ERROR, context_labels)
+                self._track_llm_error(model_actually_used, lle.code or ErrorCode.SYSTEM_ERROR, context_labels)
 
         except Exception as e:
             # Handle unexpected errors
@@ -257,7 +305,7 @@ class LLMAdapter(MCPAdapterBase):
             # Track unknown error
             should_track_metrics_on_error = llm_input_context.metadata.get('track_metrics', True) if 'llm_input_context' in locals() else True
             if should_track_metrics_on_error:
-                self._track_llm_error(model_actually_used, ErrorCode.UNKNOWN_ERROR, context_labels)
+                self._track_llm_error(model_actually_used, ErrorCode.SYSTEM_ERROR, context_labels)
 
         # Adapt output regardless of success or failure
         output_context: LLMOutputContext = await self.adapt_output(

@@ -12,6 +12,8 @@ from typing import Any, Dict, List, Literal, Optional, Set, Union
 
 from pydantic import ConfigDict, Field, ValidationInfo, field_validator
 from pydantic_settings import BaseSettings
+from dotenv import load_dotenv
+load_dotenv()
 
 # Use a simple logger for bootstrap operations
 _logger = logging.getLogger("config.settings")

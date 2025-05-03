@@ -4,7 +4,7 @@ import json
 import time
 from typing import Any, Dict, Generic, Optional, TypeVar, Union, cast
 
-from src.config.connections import get_connection_manager
+from src.config.connections import get_connection_manager, redis_async_connection
 from src.config.errors import ErrorCode, MemoryError
 from src.config.logger import get_logger
 from src.config.metrics import MEMORY_METRICS, get_metrics_manager
@@ -103,10 +103,10 @@ class TwoLevelCache(LLMCache[T]):
                 if key in self.local_cache_order:
                     self.local_cache_order.remove(key)
         try:
-            async with connection_manager.redis_async_connection() as redis:
+            async with redis_async_connection() as redis:
                 redis_key = self._get_redis_key(key)
-                time.time()
                 serialized = await redis.get(redis_key)
+                time.time()
                 if serialized is not None:
                     value: T = self.deserializer(serialized)
                     redis_ttl = await redis.ttl(redis_key)
@@ -123,14 +123,9 @@ class TwoLevelCache(LLMCache[T]):
                     logger.debug(f'L2 cache hit for key: {key}. Stored in L1.')
                     return value
                 else:
-                    self.miss_count += 1
-                    metrics.track_cache('misses', cache_type='redis')
-                    logger.debug(f'Cache miss for key: {key} (not found in L1 or L2).')
                     return None
         except Exception as e:
             logger.warning(f"Error retrieving key '{key}' from Redis cache: {str(e)}", exc_info=True)
-            self.miss_count += 1
-            metrics.track_cache('misses', cache_type='redis_error')
             return None
 
     @metrics.timed_metric(MEMORY_METRICS['duration'], {'operation_type': 'cache_set'})
@@ -144,19 +139,20 @@ class TwoLevelCache(LLMCache[T]):
         self._update_lru_order(key)
         metrics.track_cache('size', cache_type='local', value=len(self.local_cache))
         try:
-            async with connection_manager.redis_async_connection() as redis:
-                redis_key = self._get_redis_key(key)
-                serialized = self.serializer(value)
-                if effective_ttl > 0:
-                    await redis.setex(redis_key, effective_ttl, serialized)
-                else:
-                    await redis.set(redis_key, serialized)
-                self.set_count += 1
-                logger.debug(f"Set key '{key}' in L1 and L2 cache. TTL: {effective_ttl}s.")
+            async with redis_async_connection() as redis:
+                pattern = f'{self.namespace}:*'
+                cursor = '0'
+                deleted = 0
+                while True:
+                    cursor, keys = await redis.scan(cursor=cursor, match=pattern, count=1000)
+                    if keys:
+                        deleted += await redis.delete(*keys)
+                    if cursor == b'0' or int(cursor) == 0:
+                        break
                 return True
         except Exception as e:
-            logger.warning(f"Error storing key '{key}' in L2 Redis cache: {str(e)}", exc_info=True)
-        return True
+            logger.warning(f"Error clearing Redis cache namespace '{self.namespace}': {e}")
+            return False
     
     @metrics.timed_metric(MEMORY_METRICS['duration'], {'operation_type': 'cache_delete'})
     async def delete(self, key: str) -> bool:

@@ -14,9 +14,6 @@ from src.config.logger import get_logger
 from src.orchestration.orchestrator import \
     Orchestrator  # Keep for type hinting
 
-project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..'))
-if project_root not in sys.path:
-    sys.path.insert(0, project_root)
 logger = get_logger(__name__)
 router = APIRouter(prefix='/ws/v1', tags=['Streaming'])
 

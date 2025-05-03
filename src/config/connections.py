@@ -5,7 +5,8 @@ Provides connection pooling and proper resource management.
 import asyncio
 import contextlib
 import threading
-from typing import AsyncGenerator, Generator
+import os
+from typing import AsyncGenerator, Generator, Optional, Any
 
 import aiohttp
 import redis
@@ -19,6 +20,44 @@ from src.config.settings import get_settings
 
 logger = get_logger(__name__)
 
+class DummyRedisClient:
+    """테스트·로컬용 인메모리 스텁."""
+    def __init__(self):
+        self._store: dict[str, bytes] = {}
+
+    async def get(self, key: str) -> Optional[bytes]:
+        return self._store.get(key)
+
+    async def set(self, key: str, value: bytes) -> bool:
+        self._store[key] = value
+        return True
+
+    async def setex(self, key: str, ttl: int, value: bytes) -> bool:
+        self._store[key] = value
+        return True
+
+    async def delete(self, *keys: str) -> int:
+        deleted = 0
+        for k in keys:
+            if k in self._store:
+                del self._store[k]
+                deleted += 1
+        return deleted
+
+    async def scan(self, cursor=0, match: str = "*"):
+        matched = [k.encode() for k in self._store if k.startswith(match.rstrip("*"))]
+        return 0, matched
+
+    async def mget(self, *keys: str):
+        return [self._store.get(k) for k in keys]
+
+    def pipeline(self, *_, **__):
+        class _Pipe:
+            async def __aenter__(self): return self
+            async def __aexit__(self, *exc): pass
+            async def setex(self, key, ttl, value): return True
+            async def execute(self): return True
+        return _Pipe()
 
 class ConnectionManager:
     """
@@ -111,36 +150,41 @@ class ConnectionManager:
             pass
 
     # metrics.py 변경 사항 반영: 데코레이터 호출 방식 및 메트릭 이름 변경
-    @get_metrics_manager().timed_metric(MEMORY_METRICS['duration'], {'operation_type': 'connect_redis_async'})
+    @get_metrics_manager().timed_metric(
+        MEMORY_METRICS['duration'],
+        {'operation_type': 'connect_redis_async'}
+    )
     async def get_redis_async_connection(self) -> aioredis.Redis:
         """Get an async Redis connection from the pool."""
         async with self._redis_async_pool_lock:
             if self._redis_async_pool is None:
-                logger.debug('Creating new Redis async connection pool') #
+                logger.debug('Creating new Redis async connection pool')
                 pool_kwargs = {
                     'max_connections': self.settings.REDIS_CONNECTION_POOL_SIZE,
-                    'decode_responses': True
+                    # 바이너리(raw bytes) 데이터를 그대로 다루기 위해 False로 설정
+                    'decode_responses': False
                 }
                 if self.settings.REDIS_PASSWORD:
                     pool_kwargs['password'] = self.settings.REDIS_PASSWORD
 
                 try:
                     self._redis_async_pool = aioredis.ConnectionPool.from_url(
-                        self.settings.REDIS_URL, **pool_kwargs
+                        self.settings.REDIS_URL,
+                        **pool_kwargs
                     )
                     logger.info(
                         f'Redis async connection pool initialized with '
                         f'max_connections={self.settings.REDIS_CONNECTION_POOL_SIZE}'
-                    ) #
+                    )
                 except Exception as e:
                     error_msg = f"Failed to initialize Redis async connection pool: {str(e)}"
-                    logger.error(error_msg, exc_info=True) #
+                    logger.error(error_msg, exc_info=True)
                     raise ConnectionError(
                         code=ErrorCode.REDIS_CONNECTION_ERROR,
                         message=error_msg,
                         original_error=e,
                         service="redis-async"
-                    ) #
+                    )
 
         return aioredis.Redis(connection_pool=self._redis_async_pool)
 
@@ -304,3 +348,32 @@ async def cleanup_connection_pools() -> None:
     manager = get_connection_manager()
     await manager.close_all_connections()
     logger.info('Connection pool cleanup complete') #
+    
+@contextlib.asynccontextmanager
+async def redis_async_connection(**kwargs) -> AsyncGenerator[Any, None]:
+    """
+    Async Redis 연결 컨텍스트.
+    - REDIS_URL 미설정 시 → DummyRedisClient
+    - REDIS_URL 설정 시 → ConnectionManager의 실제 async Redis 풀
+    """
+    settings = get_settings()
+    redis_url = getattr(settings, "REDIS_URL", None)
+
+    # REDIS_URL이 없으면 테스트용 Dummy, 있으면 실제 풀
+    if not redis_url:
+        yield DummyRedisClient()
+        return
+
+    # 실제 풀을 반환
+    conn = await ConnectionManager().get_redis_async_connection(**kwargs)
+    try:
+        yield conn
+    finally:
+        # 풀 복귀는 ConnectionManager에서 관리
+        pass
+
+# __all__에 포함
+try:
+    __all__.append("redis_async_connection")
+except NameError:
+    __all__ = ["redis_async_connection"]

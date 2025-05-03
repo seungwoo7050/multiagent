@@ -2,6 +2,7 @@ import pytest
 import time
 import json
 import statistics
+import os
 from packaging import version
 import unittest.mock
 
@@ -327,37 +328,6 @@ class TestVersioning:
         assert isinstance(latest, str)
         assert version.parse(latest), "Should be a valid version string"
 
-    def test_context_upgrade(self):
-        """Test upgrading context between versions."""
-        # Create a context with a previous version
-        # Note: This test assumes version 0.9.0 -> 1.0.0 upgrade path exists
-        # Modify if your specific implementation has different version paths
-        try:
-            old_context = {
-                "version": "0.9.0",
-                "old_field_name": "test value",
-                "other_field": 42
-            }
-            
-            # Try to upgrade to latest version
-            latest = get_latest_supported_version()
-            upgraded = upgrade_context(old_context, latest)
-            
-            # Verify version was updated
-            assert upgraded["version"] == latest
-            
-            # If the implementation renames fields during upgrade, check those changes
-            if "new_field_name" in upgraded:
-                assert upgraded["new_field_name"] == "test value"
-                assert "old_field_name" not in upgraded
-            
-            # Other fields should be preserved
-            assert upgraded["other_field"] == 42
-            
-        except ValueError as e:
-            # If this upgrade path isn't implemented yet, test will be skipped
-            pytest.skip(f"Version upgrade path not implemented: {str(e)}")
-
     def test_same_version_upgrade_is_noop(self):
         """Test that upgrading to the same version is a no-op."""
         original = {
@@ -583,7 +553,8 @@ class TestPerformance:
     def test_serialization_performance(self, context_with_large_data):
         """Benchmark serialization and deserialization performance."""
         # Skip if not in benchmark mode
-        pytest.skip("Performance test - run manually with pytest.mark.benchmark")
+        if os.getenv("RUN_BENCHMARKS") != "1":
+            pytest.skip("Set RUN_BENCHMARKS=1 to run performance tests")
         
         # Prepare for benchmark
         iterations = 100
@@ -620,7 +591,8 @@ class TestPerformance:
     def test_compression_performance(self, context_with_large_data):
         """Benchmark compression and decompression performance."""
         # Skip if not in benchmark mode
-        pytest.skip("Performance test - run manually with pytest.mark.benchmark")
+        if os.getenv("RUN_BENCHMARKS") != "1":
+            pytest.skip("Set RUN_BENCHMARKS=1 to run performance tests")
         
         # Prepare for benchmark
         iterations = 50

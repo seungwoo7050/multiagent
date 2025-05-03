@@ -18,10 +18,6 @@ from src.core.mcp.serialization import (SerializationError,
 from src.core.mcp.versioning import (check_version_compatibility,
                                      get_latest_supported_version)
 
-project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
-if project_root not in sys.path:
-    sys.path.insert(0, project_root)
-
 logger = get_logger(__name__)
 MCP_SERIALIZATION_FORMAT_MAP = {'application/msgpack': SerializationFormat.MSGPACK, 'application/x-msgpack': SerializationFormat.MSGPACK, 'application/json+mcp': SerializationFormat.JSON}
 MCP_VERSION_HEADER = 'X-MCP-Version'

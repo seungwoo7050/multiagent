@@ -38,6 +38,43 @@ class BaseLLMAdapter(abc.ABC):
         self.error_count: int = 0
         self.average_latency: float = 0.0
         logger.debug(f"Initialized {self.__class__.__name__} for model '{model}' (provider: {provider})")
+        
+    # src/llm/base.py 수정
+    # BaseLLMAdapter 클래스에 다음 메서드 추가
+    async def execute(self, call_args: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Execute LLM request with the provided arguments.
+        This method serves as a bridge between the MCP adapter and the LLM provider-specific implementation.
+        
+        Args:
+            call_args: Dictionary containing call arguments for the LLM
+            
+        Returns:
+            Response dictionary from the LLM provider
+        """
+        # call_args에서 필요한 파라미터 추출
+        prompt = call_args.get('prompt')
+        max_tokens = call_args.get('max_tokens', self.max_tokens)
+        temperature = call_args.get('temperature', self.temperature)
+        top_p = call_args.get('top_p', self.top_p)
+        stop_sequences = call_args.get('stop_sequences')
+        use_cache = call_args.get('use_cache', True)
+        retry_on_failure = call_args.get('retry_on_failure', True)
+        
+        # 추가 파라미터는 kwargs로 전달
+        additional_params = call_args.get('additional_params', {})
+        
+        # generate 메서드 호출
+        return await self.generate(
+            prompt=prompt,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            top_p=top_p,
+            stop_sequences=stop_sequences,
+            retry_on_failure=retry_on_failure,
+            use_cache=use_cache,
+            **additional_params
+        )    
 
     @abc.abstractmethod
     async def _initialize(self) -> bool:

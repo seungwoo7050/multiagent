@@ -10,10 +10,6 @@ from starlette.types import ASGIApp
 
 from src.config.logger import get_logger
 
-project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
-if project_root not in sys.path:
-    sys.path.insert(0, project_root)
-
 logger = get_logger(__name__)
 MCP_CONTENT_TYPES = {'application/msgpack', 'application/x-msgpack', 'application/json+mcp'}
 MCP_VERSION_HEADER = 'X-MCP-Version'

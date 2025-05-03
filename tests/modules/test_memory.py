@@ -9,6 +9,7 @@ import os
 import pytest
 import time
 from unittest.mock import AsyncMock, MagicMock, patch
+from contextlib import asynccontextmanager
 
 from src.config.settings import get_settings
 from src.memory.base import BaseMemory, BaseVectorStore
@@ -18,6 +19,33 @@ from src.memory.utils import generate_memory_key, serialize_data, deserialize_da
 from src.memory.vector_store import VectorStore
 
 settings = get_settings()
+
+class DummyRedisClient:
+    def __init__(self):
+        self.store = {}
+    async def set(self, key, value, ex=None):
+        self.store[key] = value
+    async def get(self, key):
+        return self.store.get(key)
+    async def delete(self, key):
+        self.store.pop(key, None)
+
+@asynccontextmanager
+async def dummy_redis_async_connection():
+    # yield할 때 DummyRedisClient 인스턴스를 줍니다
+    yield DummyRedisClient()
+
+@pytest.fixture(autouse=True)
+def mock_redis_connection(monkeypatch):
+    """
+    모든 Redis 비동기 접속을 DummyRedisClient로 대체합니다.
+    """
+    import src.config.connections as conn_mod
+    monkeypatch.setattr(
+        conn_mod,
+        'redis_async_connection',
+        dummy_redis_async_connection
+    )
 
 # Mock the metrics manager
 @pytest.fixture
@@ -413,8 +441,6 @@ class TestVectorBackends:
 
 # Integration test for the full memory stack
 @pytest.mark.integration
-@pytest.mark.skipif(not os.environ.get("ENABLE_INTEGRATION_TESTS"), 
-                    reason="Integration tests disabled")
 class TestMemoryIntegration:
     """Integration tests for memory components"""
     
