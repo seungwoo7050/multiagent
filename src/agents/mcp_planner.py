@@ -14,6 +14,7 @@ from src.core.mcp.adapters.llm_adapter import (LLMAdapter, LLMInputContext,
                                                LLMOutputContext)
 from src.core.mcp.schema import TaskContext
 from src.core.task import TaskResult  # Added missing import
+from src.tools.registry import ToolRegistry
 
 # Get settings instance
 settings = get_settings()
@@ -21,12 +22,15 @@ logger: ContextLoggerAdapter = get_logger_with_context(__name__)
 
 class MCPPlannerAgent(BaseAgent):
 
-    def __init__(self, config: AgentConfig, memory_manager: Optional[Any]=None):
+    def __init__(self, config: AgentConfig, memory_manager: Optional[Any]=None, tool_registry=None):
         if config.agent_type not in ['mcp_planner', 'planner']:
             logger.warning(f'MCPPlannerAgent initialized with potentially mismatched config type: {config.agent_type}')
         super().__init__(config)
         self.context_manager = AgentContextManager(agent_id=self.config.name)
         self.llm_adapter = LLMAdapter()
+        self.tool_registry = tool_registry or ToolRegistry()
+
+
 
     async def initialize(self) -> bool:
         self.state = AgentState.INITIALIZING
@@ -34,6 +38,19 @@ class MCPPlannerAgent(BaseAgent):
         self.state = AgentState.IDLE
         logger.info(f'MCPPlannerAgent {self.name} initialized successfully.')
         return True
+    
+    def get_tool_descriptions(self, tool_names):
+        descriptions = []
+        for tool_name in tool_names:
+            if tool_name in self.tool_registry.get_names():
+                tool_class = self.tool_registry.get_tool_class(tool_name)
+                desc = f"- {tool_name}: {tool_class.description}"
+                if hasattr(tool_class, 'args_schema') and tool_class.args_schema:
+                    desc += f" (Parameters: {tool_class.args_schema})"
+                descriptions.append(desc)
+            else:
+                descriptions.append(f"- {tool_name}")
+        return "\n".join(descriptions)
 
     async def process(self, context: CoreAgentContext) -> AgentResult:
         global logger
@@ -63,7 +80,72 @@ class MCPPlannerAgent(BaseAgent):
         }
         
         try:
-            planning_prompt = f"""\n            **Goal:** {prompt_data['goal']}\n\n            **Available Tools:** {(', '.join(prompt_data['available_tools']) if prompt_data['available_tools'] else 'None')}\n\n            **Conversation History (if relevant):**\n            {prompt_data['conversation_history']}\n\n            **Instructions:**\n            Based on the goal, conversation history, and available tools, create a step-by-step plan to achieve the goal.\n            The plan should be in JSON format, following this schema:\n            {{\n              "plan": [\n                {{ "step": 1, "action": "tool_name or think", "args": {{ "arg_name": "value" }}, "reasoning": "Why this step?" }},\n                ...\n              ]\n            }}\n            Choose appropriate tools from the list. If no tool is suitable, use the 'think' action (e.g., {{"action": "think", "args": {{"thought": "Plan next step based on info"}}}}). Provide clear reasoning for each step. Ensure the plan directly helps achieve the goal.\n            Output ONLY the JSON plan, nothing else.\n            """
+            tool_descriptions = self.get_tool_descriptions(self.config.allowed_tools or [])
+            planning_prompt = f"""
+            **Goal:** {prompt_data['goal']}
+
+            **Available Tools:**
+            {tool_descriptions}
+
+            **Conversation History (if relevant):**
+            {prompt_data['conversation_history']}
+
+            **Instructions:**
+            Create a detailed, robust plan to achieve the goal above. Your plan must be adaptable and consider potential failures.
+
+            **Planning Guidelines:**
+            1. Consider what information you need and what actions will achieve the goal most efficiently
+            2. Break complex goals into logical sub-goals
+            3. Include fallback steps or alternative approaches if primary steps fail
+            4. Consider dependencies between steps (ensure each step builds on previous steps)
+            5. Verify results at critical points to confirm progress
+
+            **Tool Usage:**
+            - Select appropriate tools based on their descriptions
+            - If no tool is suitable, use the 'think' action to process information
+            - Consider tool limitations and potential errors
+
+            **Output Format:**
+            Provide your plan in this JSON schema:
+            {{
+            "plan": [
+                {{
+                "step": 1,
+                "action": "tool_name or think",
+                "args": {{ "arg_name": "value" }},
+                "reasoning": "Why this is the best action + what to do if it fails",
+                "expected_result": "What success looks like for this step",
+                "depends_on": [] // Step numbers this step depends on (can be empty)
+                }},
+                // Additional steps...
+            ]
+            }}
+
+            **Examples:**
+            For goal "Find current weather in Seoul":
+            {{
+            "plan": [
+                {{
+                "step": 1,
+                "action": "web_search",
+                "args": {{"query": "current weather Seoul South Korea"}},
+                "reasoning": "Direct search for current weather data. If this fails, we can try a weather API tool or specific weather websites.",
+                "expected_result": "Current temperature and conditions in Seoul",
+                "depends_on": []
+                }},
+                {{
+                "step": 2,
+                "action": "think",
+                "args": {{"thought": "Analyze weather data to extract the current temperature, conditions, and any relevant weather alerts"}},
+                "reasoning": "Need to process the raw search results into a clear answer. If information is incomplete, will need to search again with more specific terms.",
+                "expected_result": "Structured information about Seoul's current weather",
+                "depends_on": [1]
+                }}
+            ]
+            }}
+
+            Output ONLY the JSON plan, nothing else.
+            """
             logger.debug('Generated planning prompt.')
         except Exception as e:
             logger.error(f'Failed to render planning prompt: {e}', exc_info=True)

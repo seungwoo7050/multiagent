@@ -5,9 +5,7 @@ from typing import Optional, cast
 from src.config.logger import get_logger
 from src.config.metrics import get_metrics_manager
 from src.config.settings import get_settings
-from src.core.queue_worker_pool import (QueueWorkerPool, QueueWorkerPoolConfig,
-                                        QueueWorkerPoolMetrics)
-from src.core.worker_pool import WorkerPoolType, get_worker_pool
+from src.core.worker_pool import WorkerPoolType, get_worker_pool, QueueWorkerPool, QueueWorkerPoolConfig, QueueWorkerPoolMetrics
 
 metrics = get_metrics_manager()
 logger = get_logger(__name__)

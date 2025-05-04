@@ -104,11 +104,31 @@ async def get_agent_configuration(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Agent configuration for '{agent_name}' not found."
             )
+        
+        # Create a new response object with properly converted values
+        response = AgentDetailResponse(
+            name=config.name,
+            description=config.description,
+            version=config.version,
+            agent_type=config.agent_type,
+            model=config.model,
+            # Convert capabilities to strings
+            capabilities=[cap.value if hasattr(cap, 'value') else str(cap) 
+                         for cap in config.capabilities] if config.capabilities else [],
+            parameters=config.parameters,
+            max_retries=config.max_retries,
+            timeout=config.timeout,
+            allowed_tools=config.allowed_tools,
+            memory_keys=config.memory_keys,
+            metadata=config.metadata,
+            mcp_enabled=getattr(config, "mcp_enabled", False),
+            mcp_context_types=getattr(config, "mcp_context_types", [])
+        )
+        
         logger.info(f"Returning configuration for agent: {agent_name}")
-        # AgentConfig 모델을 그대로 반환
-        return config
+        return response
+        
     except HTTPException:
-        # HTTPException은 그대로 다시 발생시킴
         raise
     except Exception as e:
         logger.exception(f"Error retrieving configuration for agent: {agent_name}")
@@ -116,7 +136,63 @@ async def get_agent_configuration(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to retrieve agent configuration: {str(e)}"
         )
+        
+# Add this endpoint to src/api/routes/agents.py
 
-# 참고: 에이전트 설정 생성(POST), 수정(PUT), 삭제(DELETE) API는
-# 현재 로드맵이나 코드 구조상 명확한 요구사항이 없어 포함하지 않았습니다.
-# 필요시 여기에 추가 구현할 수 있습니다.
+@router.post(
+    "",
+    response_model=AgentInfo,
+    status_code=status.HTTP_201_CREATED,
+    summary="Register New Agent",
+    description="Register a new agent configuration from JSON data."
+)
+async def register_agent(
+    agent_config: AgentConfig,
+    agent_factory: AgentFactory = Depends(get_agent_factory_dependency)
+):
+    """
+    Register a new agent configuration from JSON data.
+    
+    The configuration must follow the AgentConfig schema and include required fields
+    such as name, agent_type, etc.
+    """
+    logger.info(f"Request received to register new agent: {agent_config.name}")
+    
+    try:
+        # Check if an agent with this name already exists
+        if agent_config.name in agent_factory._agent_configs:
+            logger.warning(f"Agent with name '{agent_config.name}' already exists")
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Agent with name '{agent_config.name}' already exists"
+            )
+        
+        # Validate that the agent_type is registered
+        if not agent_factory.has_agent_type(agent_config.agent_type):
+            logger.error(f"Agent type '{agent_config.agent_type}' is not registered")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Agent type '{agent_config.agent_type}' is not registered. Available types: {agent_factory.get_registered_agent_types()}"
+            )
+        
+        # Register the agent configuration
+        agent_factory.register_agent_config(agent_config)
+        
+        logger.info(f"Successfully registered new agent: {agent_config.name}")
+        
+        # Return basic info about the registered agent
+        return AgentInfo(
+            name=agent_config.name,
+            agent_type=agent_config.agent_type,
+            description=agent_config.description,
+            version=agent_config.version
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"Error registering new agent: {agent_config.name}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to register agent: {str(e)}"
+        )

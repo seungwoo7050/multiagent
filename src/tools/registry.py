@@ -108,6 +108,16 @@ class ToolRegistry:
         metrics.track_registry('operations', registry_name='tool_registry', operation_type='unregistration')
         metrics.track_registry('size', registry_name='tool_registry', value=len(self._tools))
         logger.info(f"Tool '{tool_name}' unregistered successfully.")
+        
+    def list_names(self) -> List[str]:
+        """
+        Return a list of all registered tool names.
+        Alias for get_names() to maintain backward compatibility.
+        
+        Returns:
+            List[str]: Names of all registered tools
+        """
+        return list(self.get_names())
 
     def get_names(self) -> Set[str]:
         return set(self._tools.keys())

@@ -1,15 +1,28 @@
-from typing import Any, Dict, Optional
+# src/api/schemas/task.py
+from enum import Enum
+from typing import Any, Dict, Optional, Union
 
 from pydantic import BaseModel, Field
 
 
+class TaskPriority(str, Enum):
+    LOW = "LOW"
+    NORMAL = "NORMAL"
+    HIGH = "HIGH"
+    CRITICAL = "CRITICAL"
+
+    def as_int(self) -> int:
+        return {"LOW": 1, "NORMAL": 2, "HIGH": 3, "CRITICAL": 4}[self.value]
+
 class CreateTaskRequest(BaseModel):
-    goal: str = Field(..., description='작업의 최종 목표 설명')
-    task_type: Optional[str] = Field(None, description="실행할 에이전트 유형 (예: 'planner', 'executor'). 미지정 시 기본 로직 따름.")
-    input_data: Dict[str, Any] = Field(default_factory=dict, description='작업 실행에 필요한 추가 입력 데이터')
-    priority: int = Field(default=2, ge=1, le=4, description='작업 우선순위 (1=Low, 2=Normal, 3=High, 4=Critical)')
-    metadata: Optional[Dict[str, Any]] = Field(default_factory=dict, description='작업에 첨부할 추가 메타데이터')
+    goal: str
+    task_type: Optional[str] = None
+    input_data: Dict[str, Any] = Field(default_factory=dict)
+    # int 또는 Enum 모두 허용
+    priority: Union[TaskPriority, int] = TaskPriority.NORMAL
+    metadata: Optional[Dict[str, Any]] = Field(default_factory=dict)
+
 
 class CreateTaskResponse(BaseModel):
-    task_id: str = Field(..., description='새로 생성된 작업의 고유 ID')
-    status: str = Field(default='submitted', description='작업 제출 상태')
+    task_id: str = Field(..., description="새로 생성된 작업의 고유 ID")
+    status: str = Field(default="submitted", description="작업 제출 상태")

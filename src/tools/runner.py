@@ -2,6 +2,7 @@ import asyncio
 import random
 import time
 import traceback
+import uuid
 from typing import Any, Coroutine, Dict, List, Optional, Set, Tuple, Union
 
 from src.config.errors import ErrorCode, ToolError
@@ -55,7 +56,7 @@ class ToolRunner:
         
         logger.info(
             f"Executing tool '{tool_name}' with args: {args}", 
-            extra={'tool_name': tool_name, 'args': args, **logger_ctx}
+            extra={'tool_name': tool_name, **logger_ctx}
         )
         
         # Execute the tool
@@ -66,10 +67,7 @@ class ToolRunner:
             result = await tool_instance.arun(**args)
             execution_time = time.monotonic() - start_time
             
-            logger.info(
-                f"Tool '{tool_name}' executed successfully in {execution_time:.6f}s", 
-                extra={'tool_name': tool_name, 'execution_time': execution_time, **logger_ctx}
-            )
+            logger.info(f"Tool '{tool_name}' executed successfully in {execution_time:.6f}s")
             
             return self._format_result(result, tool_name, execution_time)
             

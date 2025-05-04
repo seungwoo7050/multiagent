@@ -56,18 +56,25 @@ async def get_system_configuration(
     """
     logger.info("Request received to get system configuration")
     try:
-        # Pydantic v2의 model_dump 사용 (v1이면 .dict() 사용)
+        # Safely serialize to handle complex objects
+        from src.utils.serialization import serialize_to_json, deserialize_from_json
+        
+        # First get dict representation
         config_dict = settings.model_dump(mode='json')
-
-        # 민감 정보 필터링
-        filtered_config: Dict[str, Any] = {}
+        
+        # Process and filter with serialization for complex objects
+        filtered_config = {}
         for key, value in config_dict.items():
             if key.lower() in SENSITIVE_MODEL_FIELDS:
                 filtered_config[key] = "***REDACTED***"
             elif key == "llm_providers_config" and isinstance(value, dict):
-                # LLM Provider 설정 내부의 API 키 마스킹
+                # Serialize this section to handle nested complex objects
+                serialized = serialize_to_json(value)
+                providers_dict = deserialize_from_json(serialized)
+                
+                # Apply masking for API keys
                 provider_configs_filtered = {}
-                for provider, provider_config in value.items():
+                for provider, provider_config in providers_dict.items():
                     if isinstance(provider_config, dict):
                         provider_configs_filtered[provider] = {
                             k: ("***REDACTED***" if k == "api_key" else v)
@@ -77,9 +84,10 @@ async def get_system_configuration(
                         provider_configs_filtered[provider] = provider_config
                 filtered_config[key] = provider_configs_filtered
             else:
-                filtered_config[key] = value
-
-        logger.info("Returning filtered system configuration")
+                # Serialize each value individually to handle potential complex objects
+                serialized = serialize_to_json(value)
+                filtered_config[key] = deserialize_from_json(serialized)
+                
         return filtered_config
 
     except Exception as e:

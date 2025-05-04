@@ -30,6 +30,19 @@ class MCPExecutorAgent(BaseAgent):
         self.tool_runner = ToolRunner()
         self.tool_registry = tool_registry if tool_registry is not None else ToolRegistry()
         self.max_react_iterations = self.config.parameters.get('max_react_iterations', 5)
+        
+    def get_tool_descriptions(self, tool_names):
+        descriptions = []
+        for tool_name in tool_names:
+            if tool_name in self.tool_registry.get_names():
+                tool_class = self.tool_registry.get_tool_class(tool_name)
+                desc = f"- {tool_name}: {tool_class.description}"
+                if hasattr(tool_class, 'args_schema') and tool_class.args_schema:
+                    desc += f" (Parameters: {tool_class.args_schema})"
+                descriptions.append(desc)
+            else:
+                descriptions.append(f"- {tool_name}")
+        return "\n".join(descriptions)
 
     async def initialize(self) -> bool:
         self.state = AgentState.INITIALIZING
@@ -93,7 +106,7 @@ class MCPExecutorAgent(BaseAgent):
                 break
             elif action_type.lower() == 'think':
                 observation = 'Acknowledged internal thought process. Continuing evaluation.'
-            elif self.tool_registry.has(action_type):
+            elif action_type in self.tool_registry.get_names():
                 logger.info(f'Executing tool: {action_type} with args: {action_input}')
                 try:
                     tool_result: Dict[str, Any] = await self.tool_runner.run_tool(
@@ -150,20 +163,41 @@ class MCPExecutorAgent(BaseAgent):
     async def _generate_thought(self, goal: str, plan: List[Dict[str, Any]], scratchpad: str, executed_steps: int) -> str:
         """Generate a thought using LLM based on current execution state"""
         prompt = f"""
-        You are an Executor Agent following a plan to achieve a goal.
+        You are an Executor Agent responsible for executing a plan step-by-step to achieve a goal.
+
+        **CONTEXT:**
         Goal: {goal}
         Plan: {json.dumps(plan, indent=2)}
-        Execution History (Scratchpad):
+
+        **CURRENT STATE:**
+        Current Plan Step: {executed_steps + 1}
+        Execution History:
         {scratchpad}
 
-        Based on the goal, the overall plan, and the execution history (especially the last Observation), what is your reasoning and thought process for the *next* action you should take?
-        Consider the current step based on 'executed_steps' ({executed_steps}) and the remaining plan.
-        Is the last observation what you expected? Does it mean the last action succeeded or failed?
-        What is the *most logical* next step according to the plan and the current situation?
-        Keep your thought concise and focused on determining the next action.
+        **TASK:**
+        Generate your thought process for determining the next action. Consider:
 
-        Thought:"""
+        1. Progress evaluation:
+        - Has the last action succeeded or failed? What evidence supports this?
+        - Is the last observation what you expected? If not, what's different?
+        - Are we making progress toward the goal?
+
+        2. Plan assessment:
+        - Is the current plan step still appropriate given observations?
+        - Do we need to adapt or modify the plan based on new information?
+        - Should we skip, repeat, or revise any steps?
+
+        3. Next step determination:
+        - What exactly should be the next action according to the plan?
+        - What parameters/arguments will make this action most effective?
+        - Are there any risks or edge cases to consider?
+
+        Keep your thinking process logical, concise and focused on determining the optimal next action.
+
+        Thought:
+        """
         
+        # LLM 호출 부분은 그대로 유지
         llm_input_context = LLMInputContext(
             model=self.config.model or settings.PRIMARY_LLM, 
             prompt=prompt,
@@ -194,25 +228,52 @@ class MCPExecutorAgent(BaseAgent):
     async def _generate_action(self, goal: str, plan: List[Dict[str, Any]], scratchpad: str, executed_steps: int) -> str:
         """Generate an action using LLM based on current execution state"""
         available_tools = list(self.tool_registry.get_names())
-        prompt = f"""
-        You are an Executor Agent following a plan.
-        Goal: {goal}
-        Plan: {json.dumps(plan, indent=2)}
-        Execution History (Scratchpad):
-        {scratchpad}
-        Available Tools: {available_tools}
-
-        Based on your last thought and the overall progress, what is the *exact next action* to take?
-        Your action *must* be in one of the following formats:
-        1. Tool Call: `ToolName[Input JSON]` (e.g., `web_search[{{"query": "latest AI news"}}]`) Use a tool from the Available Tools list. Input JSON must be valid.
-        2. Internal Thought: `think[]` (Use this if you need to reflect or plan internally without an external action).
-        3. Finish Execution: `finish[Output JSON]` (e.g., `finish[{{"answer": "The capital of France is Paris."}}]`) Use this only when the goal is fully achieved based on the observations. Output JSON should contain the final answer.
-
-        Analyze the last Thought in the scratchpad and choose the most logical next Action based on the plan and available tools.
-        Output *only* the Action string in the specified format, starting with the action name, followed by square brackets containing the JSON input (or empty for 'think').
-
-        Action:"""
+        tool_descriptions = self.get_tool_descriptions(available_tools)
         
+        prompt = f"""
+        You are an Executor Agent following a plan to achieve a specific goal.
+
+        **CONTEXT:**
+        Goal: {goal}
+        Current Plan Step: {executed_steps + 1}
+        Plan: {json.dumps(plan, indent=2)}
+        Execution History:
+        {scratchpad}
+
+        **AVAILABLE TOOLS:**
+        {tool_descriptions}
+
+        **ACTION REQUIREMENTS:**
+        Based on your thought process and the execution state, determine the precise next action. Your action MUST be in one of these formats:
+
+        1. Tool Call: `ToolName[{{"param1": "value1", "param2": "value2"}}]`
+        - Example: `web_search[{{"query": "weather in Paris today"}}]`
+        - Example: `calculator[{{"expression": "23.5 * 1.08"}}]`
+        - Use ONLY tools from the available tools list with their exact names
+        - Ensure all required parameters are included and formatted correctly
+
+        2. Think: `think[{{"thought": "detailed internal reasoning"}}]`
+        - Use when you need to process information without external tools
+        - Example: `think[{{"thought": "The search results indicate..."}}]`
+
+        3. Finish: `finish[{{"answer": "final answer with explanation"}}]`
+        - ONLY use when the goal is fully achieved or cannot be achieved
+        - Example: `finish[{{"answer": "The temperature in Paris is 22°C."}}]`
+        - Include a complete, clear answer that fulfills the original goal
+
+        **DECISION CRITERIA:**
+        - Choose "finish" only when:
+        1. You have collected all information needed to fulfill the goal, OR
+        2. You've determined the goal cannot be accomplished (explain why)
+        - Choose a tool when external information or computation is needed
+        - Choose "think" when you need to process information before proceeding
+
+        Output ONLY the action string in the specified format.
+
+        Action:
+        """
+        
+        # LLM 호출 부분은 그대로 유지
         llm_input_context = LLMInputContext(
             model=self.config.model or settings.PRIMARY_LLM, 
             prompt=prompt,

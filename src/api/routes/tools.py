@@ -1,7 +1,8 @@
 # src/api/routes/tools.py
 
 import os
-# 프로젝트 루트 경로 설정 (app.py와 동일하게)
+import time
+import uuid
 import sys
 from typing import Any, Dict, List, Optional
 
@@ -116,123 +117,105 @@ async def list_available_tools(
         )
 
 # /tools/{tool_name} (GET): 특정 도구의 상세 정보 반환
-@router.get(
-    "/{tool_name}",
-    response_model=ToolDetail,
-    summary="Get Tool Details",
-    description="Retrieves detailed information about a specific tool, including its argument schema.",
-    responses={
-        status.HTTP_404_NOT_FOUND: {"description": "Tool not found"}
-    }
-)
-async def get_tool_details(
-    tool_name: str = Path(..., description="The name of the tool to retrieve details for."),
-    tool_registry: ToolRegistry = Depends(get_tool_registry_dependency)
-):
-    """
-    지정된 `tool_name`을 가진 도구의 상세 정보(이름, 설명, 인자 스키마)를 반환합니다.
-    """
-    logger.info(f"Request received to get details for tool: {tool_name}")
+@router.get("/{tool_name}")
+async def get_tool_details(tool_name: str, tool_registry: ToolRegistry = Depends(get_tool_registry_dependency)):
     try:
-        tool = await tool_registry.get_tool(tool_name) # get_tool은 인스턴스를 반환
-        schema_dict = tool_registry._get_schema_dict(tool.args_schema) # 스키마 추출 (private 메서드 사용 예시, 실제 구현에 따라 다를 수 있음)
-        # ToolSchema 모델에 맞게 변환
-        properties_model = {k: ToolSchemaProperty(**v) for k, v in schema_dict.get('properties', {}).items()}
-        tool_schema = ToolSchema(
-            title=schema_dict.get('title', f"{tool_name.capitalize()} Input"),
-            properties=properties_model,
-            required=schema_dict.get('required', [])
-        )
-        detail = ToolDetail(
-            name=tool.name,
-            description=tool.description,
-            args_schema=tool_schema
-        )
-        logger.info(f"Returning details for tool: {tool_name}")
-        return detail
-    except ErrorCode.ToolNotFoundError:
-        logger.warning(f"Tool not found: {tool_name}")
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Tool '{tool_name}' not found."
-        )
+        if tool_name not in tool_registry.get_names():  
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Tool '{tool_name}' not found.")
+        
+        tool = tool_registry.get_tool(tool_name)
+        
+        # Build simple dict with only primitive types
+        response = {
+            "name": tool.name,
+            "description": tool.description,
+            "args_schema": {
+                "title": tool.name,
+                "type": "object",
+                "properties": {},
+                "required": []
+            }
+        }
+        
+        # Add schema info if available
+        if hasattr(tool, 'args_schema') and tool.args_schema:
+            try:
+                if hasattr(tool.args_schema, 'schema'):
+                    schema = tool.args_schema.schema()
+                    # Process schema properties to ensure they're serializable
+                    for prop_name, prop_data in schema.get('properties', {}).items():
+                        # Convert enums to primitive values
+                        if 'enum' in prop_data:
+                            prop_data['enum'] = [str(v) for v in prop_data['enum']]
+                        response['args_schema']['properties'][prop_name] = prop_data
+                    
+                    # Add required fields if present
+                    if 'required' in schema:
+                        response['args_schema']['required'] = schema['required']
+            except Exception as e:
+                logger.warning(f"Error processing schema for {tool_name}: {e}")
+                
+        return response
+        
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception(f"Error retrieving details for tool: {tool_name}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to retrieve tool details: {str(e)}"
-        )
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to retrieve tool details: {str(e)}")
 
-# /tools/{tool_name}/execute (POST): 특정 도구 실행
 @router.post(
     "/{tool_name}/execute",
     response_model=ToolExecutionResponse,
-    summary="Execute a Tool",
-    description="Executes the specified tool with the provided arguments.",
-    responses={
-        status.HTTP_404_NOT_FOUND: {"description": "Tool not found"},
-        status.HTTP_400_BAD_REQUEST: {"description": "Tool execution error (e.g., validation, runtime)"}
-    }
+    status_code=status.HTTP_200_OK,
+    summary="Execute a tool immediately"
 )
 async def execute_tool(
-    tool_name: str = Path(..., description="The name of the tool to execute."),
-    request_body: ToolExecutionRequest = Body(...),
-    tool_registry: ToolRegistry = Depends(get_tool_registry_dependency),
-    tool_runner: ToolRunner = Depends(get_tool_runner_dependency)
+    tool_name: str,
+    body: ToolExecutionRequest,
+    registry: ToolRegistry = Depends(get_tool_registry_dependency),
+    runner: ToolRunner = Depends(get_tool_runner_dependency),
 ):
-    """
-    지정된 `tool_name`의 도구를 `request_body`에 포함된 `args`로 실행하고 결과를 반환합니다.
-    """
-    logger.info(f"Request received to execute tool: {tool_name} with args: {request_body.args}")
-    trace_id = None # 필요시 request_body.metadata 등에서 추출
+    if tool_name not in registry.get_names():
+        raise HTTPException(status_code=404, detail=f"Tool '{tool_name}' not found")
+
+    start = time.perf_counter()
     try:
-        # ToolRunner의 run_tool 사용
-        result_dict = await tool_runner.run_tool(
-            tool=tool_name,
-            tool_registry=tool_registry,
-            args=request_body.args,
+        # Add more detailed exception handling
+        tool = registry.get_tool(tool_name)
+        if not tool:
+            raise ValueError(f"Tool '{tool_name}' could not be instantiated")
+        
+        trace_id = str(uuid.uuid4())
+            
+        # Fixed parameters: use proper parameter names and order
+        result = await runner.run_tool(
+            tool=tool_name, 
+            tool_registry=registry, 
+            args=body.args, 
             trace_id=trace_id
         )
-        # ToolRunner의 반환 형식을 ToolExecutionResponse에 맞게 변환
-        response = ToolExecutionResponse(**result_dict)
-
-        if response.status == 'error':
-            # ToolError 또는 BaseError에서 상태 코드 추론 시도
-            error_info = response.error or {}
-            error_code_str = error_info.get('code', ErrorCode.TOOL_EXECUTION_ERROR.value)
-            status_code = ERROR_TO_HTTP_STATUS.get(ErrorCode(error_code_str), status.HTTP_400_BAD_REQUEST)
-
-            # ToolNotFoundError는 404로 처리
-            if error_code_str == ErrorCode.TOOL_NOT_FOUND.value:
-                status_code = status.HTTP_404_NOT_FOUND
-
-            logger.warning(f"Tool execution failed for {tool_name}. Status Code: {status_code}, Error: {response.error}")
-            raise HTTPException(
-                status_code=status_code,
-                detail=response.error # 에러 상세 정보를 클라이언트에게 전달
+        
+        # Check if we need to extract the actual result from the nested structure
+        if result.get('status') == 'success' and isinstance(result.get('result'), dict):
+            # Extract the actual result for the response
+            return ToolExecutionResponse(
+                status="success",
+                tool_name=tool_name,
+                execution_time=round(time.perf_counter() - start, 6),
+                result=result.get('result'),
             )
-
-        logger.info(f"Tool '{tool_name}' executed successfully. Execution time: {response.execution_time}s")
-        return response
-
-    except HTTPException:
-        raise # 이미 HTTPException이면 그대로 전달
-    except ErrorCode.ToolNotFoundError as e:
-        logger.warning(f"Tool not found during execution attempt: {tool_name}")
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Tool '{tool_name}' not found."
-        ) from e
-    except ToolError as e:
-         # 다른 ToolError (Validation, Timeout 등)
-        logger.error(f"ToolError executing tool {tool_name}: {e.message}", extra=e.to_dict())
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST, # 또는 에러 코드에 맞는 상태 코드
-            detail=e.to_dict() # 에러 상세 정보 전달
-        ) from e
-    except Exception as e:
-        logger.exception(f"Unexpected error executing tool: {tool_name}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Unexpected error executing tool '{tool_name}': {str(e)}"
-        ) from e
+        else:
+            return ToolExecutionResponse(
+                status="success",
+                tool_name=tool_name,
+                execution_time=round(time.perf_counter() - start, 6),
+                result=result,
+            )
+    except Exception as exc:
+        logger.exception(f"Tool execution failed: {exc}")
+        return ToolExecutionResponse(
+            status="error",
+            tool_name=tool_name,
+            execution_time=round(time.perf_counter() - start, 6),
+            error={"detail": str(exc)},
+        )

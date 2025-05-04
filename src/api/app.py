@@ -425,8 +425,8 @@ try:
     logger.info('Included streaming WebSocket routes.')
 
     from src.api.routes import metrics as metrics_router
-    app.include_router(metrics_router.router) # prefix 없음
-    logger.info('Included metrics routes.')
+    app.include_router(metrics_router.router, prefix=settings.API_PREFIX)  # ← '/api/v1/metrics'
+    logger.info(f'Included metrics routes under prefix: {settings.API_PREFIX}')
 
 except ImportError as e:
     logger.error(f'Failed to import API routes: {e}. Some endpoints will be unavailable.')

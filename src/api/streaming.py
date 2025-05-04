@@ -32,8 +32,19 @@ class ConnectionManager:
 
     async def broadcast(self, message: Any, task_id: str):
         if task_id in self.active_connections:
-            for connection in self.active_connections[task_id]:
-                await connection.send_json(message)
+            connections = self.active_connections[task_id]
+            logger.debug(f"Broadcasting to {len(connections)} connection(s) for task {task_id}")
+            
+            for connection in connections:
+                try:
+                    await connection.send_json(message)
+                    logger.debug(f"Message sent to client for task {task_id}")
+                except Exception as e:
+                    logger.error(f"Failed to send message to client for task {task_id}: {e}", exc_info=True)
+                    # Remove dead connections
+                    self.active_connections[task_id].remove(connection)
+        else:
+            logger.debug(f"No active connections for task {task_id}")
 
 # 전역 인스턴스
 _connection_manager = None
