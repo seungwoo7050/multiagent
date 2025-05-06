@@ -1,50 +1,32 @@
-# src/api/routes/agents.py
-
 import os
-# 프로젝트 루트 경로 설정 (app.py와 동일하게)
 import sys
 from typing import Dict, List, Optional
-
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel
 
 from src.agents.config import AgentConfig
 from src.agents.factory import AgentFactory, get_agent_factory
 from src.config.logger import get_logger
 
+from src.schemas.response_models import AgentInfo, AgentDetailResponse # 추가됨
+
+
 logger = get_logger(__name__)
 
-# APIRouter 인스턴스 생성
 router = APIRouter(
-    prefix="/agents",  # app.py에서 API_PREFIX가 추가되므로 여기서는 '/agents'만 사용
-    tags=["Agent Management"] # OpenAPI 문서 상의 태그
+    prefix="/agents",
+    tags=["Agent Management"]
 )
 
-# 응답 모델 정의 (간단한 예시)
-# 실제로는 src/api/schemas/agent.py 등으로 분리하는 것이 좋습니다.
-class AgentInfo(BaseModel):
-    name: str
-    agent_type: str
-    description: Optional[str] = None
-    version: str
-
-class AgentDetailResponse(AgentConfig):
-    # AgentConfig를 그대로 사용하거나 필요한 필드만 포함하도록 수정 가능
-    pass
-
-# 의존성 주입 함수 (AgentFactory 인스턴스 가져오기)
 async def get_agent_factory_dependency() -> AgentFactory:
     try:
         return await get_agent_factory()
     except Exception as e:
         logger.error(f"Failed to get AgentFactory dependency: {e}", exc_info=True)
-        # 의존성 로드 실패 시 500 에러 발생
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Agent service initialization failed."
         )
 
-# /agents (GET): 등록된 모든 에이전트 설정 목록 반환
 @router.get(
     "",
     response_model=List[AgentInfo],

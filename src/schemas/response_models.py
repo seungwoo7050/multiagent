@@ -1,0 +1,105 @@
+# src/schemas/response_models.py
+"""
+API 응답에 사용되는 Pydantic 모델 정의
+"""
+from enum import Enum
+from typing import Any, Dict, List, Optional, Literal, Union
+from pydantic import BaseModel, Field
+from src.schemas.enums import TaskState # TaskState enum 임포트
+
+# --- Task 관련 응답 모델 ---
+class TaskSubmittedResponse(BaseModel):
+    """작업 제출 성공 시 응답 모델"""
+    task_id: str = Field(..., description="새로 생성된 작업의 고유 ID")
+    status: Literal["submitted"] = Field(default="submitted", description="작업 제출 상태")
+
+class TaskStatusResponse(BaseModel):
+    """작업 상태 조회 응답 모델"""
+    id: str = Field(..., description="작업 ID")
+    state: TaskState = Field(..., description="현재 작업 상태 (pending, running, completed, failed, canceled)")
+    result: Optional[Dict[str, Any]] = Field(None, description="작업 성공 시 결과 데이터")
+    error: Optional[Union[str, Dict[str, Any]]] = Field(None, description="작업 실패 시 에러 정보")
+
+
+# --- Tool 관련 응답 모델 ---
+class ToolSchemaProperty(BaseModel):
+    """도구 인자 스키마의 속성(property) 정보"""
+    title: Optional[str] = None
+    type: Optional[str] = None
+    description: Optional[str] = None
+    default: Optional[Any] = None
+    format: Optional[str] = None
+    items: Optional[Dict[str, Any]] = None # for array type
+    properties: Optional[Dict[str, Any]] = None # for object type
+
+class ToolSchema(BaseModel):
+    """도구의 인자 스키마 구조"""
+    title: str = Field(..., description="도구 인자 스키마 제목 (보통 도구 이름)")
+    type: str = Field(default='object', description="스키마 타입 (일반적으로 'object')")
+    properties: Dict[str, ToolSchemaProperty] = Field(default_factory=dict, description="인자 속성 정의")
+    required: List[str] = Field(default_factory=list, description="필수 인자 목록")
+
+class ToolInfo(BaseModel):
+    """도구 목록 조회 시 사용되는 기본 정보 모델"""
+    name: str = Field(..., description="도구 이름")
+    description: str = Field(..., description="도구 설명")
+    args_schema_summary: Optional[Dict[str, str]] = Field(None, description="인자 스키마 요약 (인자명: 타입)")
+
+class ToolDetail(BaseModel):
+    """도구 상세 정보 모델 (스키마 포함)"""
+    name: str = Field(..., description="도구 이름")
+    description: str = Field(..., description="도구 설명")
+    args_schema: ToolSchema = Field(..., description="도구의 상세 인자 스키마")
+
+class ToolExecutionResponse(BaseModel):
+    """도구 실행 결과 응답 모델"""
+    status: str = Field(..., description="'success' 또는 'error'")
+    tool_name: str = Field(..., description="실행된 도구 이름")
+    execution_time: Optional[float] = Field(None, description="실행 시간(초)")
+    result: Optional[Any] = Field(None, description="도구 실행 결과 (성공 시)")
+    error: Optional[Dict[str, Any]] = Field(None, description="에러 상세 정보 (실패 시)")
+
+
+# --- Context 관련 응답 모델 ---
+class ContextResponse(BaseModel):
+    """Context 조회 응답 모델"""
+    context_id: str = Field(..., description="Context ID")
+    data: Dict[str, Any] = Field(..., description="Context 데이터")
+
+class ContextOperationResponse(BaseModel):
+    """Context 생성/수정 결과 응답 모델"""
+    context_id: str = Field(..., description="Context ID")
+    status: Literal["created", "updated"] = Field(..., description="작업 상태")
+    message: str = Field(..., description="결과 메시지")
+
+
+# --- Agent 관련 응답 모델 ---
+class AgentInfo(BaseModel):
+    """에이전트 목록 조회 시 사용되는 기본 정보 모델"""
+    name: str = Field(..., description="에이전트 이름")
+    agent_type: str = Field(..., description="에이전트 타입")
+    description: Optional[str] = Field(None, description="에이전트 설명")
+    version: str = Field(..., description="에이전트 버전")
+
+class AgentDetailResponse(BaseModel): # AgentConfig를 직접 사용하기보다 필요한 필드만 정의
+    """에이전트 상세 설정 응답 모델"""
+    name: str
+    description: Optional[str] = None
+    version: str
+    agent_type: str
+    model: Optional[str] = None
+    capabilities: List[str] = Field(default_factory=list) # Enum 대신 문자열 리스트로 응답
+    parameters: Dict[str, Any] = Field(default_factory=dict)
+    max_retries: int
+    timeout: float
+    allowed_tools: List[str] = Field(default_factory=list)
+    memory_keys: List[str] = Field(default_factory=list)
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+    mcp_enabled: bool
+    mcp_context_types: List[str] = Field(default_factory=list)
+
+
+# --- 시스템 관련 응답 모델 ---
+class HealthCheckResponse(BaseModel):
+    """헬스체크 응답 모델"""
+    status: str = Field(default='ok', description="시스템 상태")

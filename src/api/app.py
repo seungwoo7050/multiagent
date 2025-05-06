@@ -28,6 +28,8 @@ from src.orchestration.orchestrator import \
     get_orchestrator  # Import the core orchestrator getter
 from src.orchestration.scheduler import get_scheduler
 from src.tools.registry import get_registry as get_tool_registry
+from src.schemas.response_models import HealthCheckResponse
+
 
 # --- Project Root Setup ---
 # Ensure the project root is in the Python path
@@ -384,10 +386,6 @@ async def generic_exception_handler(request: Request, exc: Exception):
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
         content={"detail": "An internal server error occurred.", "code": ErrorCode.SYSTEM_ERROR.value},
     )
-
-# --- Health Check Endpoint ---
-class HealthCheckResponse(BaseModel):
-    status: str = 'ok'
 
 @app.get('/health', tags=['System'], response_model=HealthCheckResponse)
 async def health_check():

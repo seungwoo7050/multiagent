@@ -14,6 +14,14 @@ from src.config.logger import get_logger
 from src.tools.registry import ToolRegistry
 from src.tools.registry import get_registry as get_tool_registry
 from src.tools.runner import ToolRunner
+from src.schemas.request_models import ToolExecutionRequest # 추가됨
+from src.schemas.response_models import ( # 추가됨
+    ToolInfo,
+    ToolDetail,
+    ToolExecutionResponse,
+    ToolSchema, # ToolDetail 에서 사용
+    ToolSchemaProperty # ToolSchema 에서 사용
+)
 
 logger = get_logger(__name__)
 
@@ -23,48 +31,6 @@ router = APIRouter(
     tags=["Tool Management & Execution"]
 )
 
-# 응답/요청 모델 정의
-class ToolSchemaProperty(BaseModel):
-    title: Optional[str] = None
-    type: Optional[str] = None
-    description: Optional[str] = None
-    default: Optional[Any] = None
-    format: Optional[str] = None
-    # Pydantic v1/v2 호환성을 위해 items 추가 (v2에서는 properties가 우선)
-    items: Optional[Dict[str, Any]] = None # For arrays
-    properties: Optional[Dict[str, Any]] = None # For objects
-
-
-class ToolSchema(BaseModel):
-    title: str
-    type: str = 'object'
-    properties: Dict[str, ToolSchemaProperty] = Field(default_factory=dict)
-    required: List[str] = Field(default_factory=list)
-
-class ToolInfo(BaseModel):
-    name: str
-    description: str
-    # args_schema를 간단한 형태로 표시
-    args_schema_summary: Optional[Dict[str, str]] = None # 예: {"query": "string", "num_results": "integer"}
-
-class ToolDetail(BaseModel):
-    name: str
-    description: str
-    args_schema: ToolSchema # 상세 스키마 정보 포함
-
-class ToolExecutionRequest(BaseModel):
-    args: Dict[str, Any] = Field(default_factory=dict, description="Arguments to pass to the tool, matching its args_schema.")
-    # 필요하다면 trace_id 등 추가 메타데이터 필드 포함 가능
-    # metadata: Optional[Dict[str, Any]] = None
-
-class ToolExecutionResponse(BaseModel):
-    status: str = Field(..., description="'success' or 'error'")
-    tool_name: str
-    execution_time: Optional[float] = Field(None, description="Execution time in seconds (if available)")
-    result: Optional[Any] = Field(None, description="Result of the tool execution (if successful)")
-    error: Optional[Dict[str, Any]] = Field(None, description="Error details (if execution failed)")
-
-# 의존성 주입 함수
 async def get_tool_registry_dependency() -> ToolRegistry:
     try:
         # 'global_tools' 이름으로 ToolRegistry 인스턴스 가져오기 (app.py에서 설정한 이름과 일치 필요)

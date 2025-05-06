@@ -6,6 +6,7 @@ import urllib.parse
 from typing import Any, Dict, List, Optional, Type
 
 import aiohttp
+import msgspec
 from pydantic import BaseModel, Field, field_validator
 
 from src.config.connections import get_connection_manager
@@ -297,49 +298,59 @@ class WebSearchTool(BaseTool):
         return f'tool:web_search:{hash_value}'
 
     async def _get_from_cache(self, cache_key: str) -> Optional[Dict[str, Any]]:
-        """Retrieve cached search results."""
+        """Retrieve cached search results using msgspec."""
         logger.debug(f'Attempting to get web search result from cache (Key: {cache_key})')
-        
+        decoder = msgspec.msgpack.Decoder(Dict[str, Any]) # 디코더 정의
+
         try:
-            redis = await conn_manager.get_redis_async_connection()
-            time.time()
-            cached_data_bytes: Optional[bytes] = await redis.get(cache_key)
-            
-            if cached_data_bytes:
-                cached_result: Dict[str, Any] = json.loads(cached_data_bytes.decode('utf-8'))
-                logger.debug(f'Cache hit in Redis for key: {cache_key}')
-                return cached_result
-            else:
-                logger.debug(f'Cache miss in Redis for key: {cache_key}')
-                return None
-                
+            async with redis_async_connection() as redis: # 컨텍스트 관리자 사용
+                cached_data_bytes: Optional[bytes] = await redis.get(cache_key)
+
+                if cached_data_bytes:
+                    try:
+                        # msgspec으로 역직렬화
+                        cached_result: Dict[str, Any] = decoder.decode(cached_data_bytes)
+                        logger.debug(f'Cache hit in Redis for key: {cache_key} (using msgspec)')
+                        return cached_result
+                    except (msgspec.DecodeError, TypeError) as decode_err:
+                         logger.warning(f"Failed to decode msgpack cache for key '{cache_key}': {decode_err}")
+                         metrics.track_cache('errors', cache_type='web_search', error_type='decode_error')
+                         await redis.delete(cache_key) # 잘못된 데이터 삭제
+                         return None
+                else:
+                    logger.debug(f'Cache miss in Redis for key: {cache_key}')
+                    return None
+
         except Exception as e:
             logger.warning(
-                f'Failed to retrieve from web search cache (Key: {cache_key}): {str(e)}', 
+                f'Failed to retrieve from web search cache (Key: {cache_key}): {str(e)}',
                 exc_info=True
             )
             track_cache_miss('web_search_redis_error')
             return None
 
     async def _save_to_cache(self, cache_key: str, data: Dict[str, Any]) -> bool:
-        """Save search results to cache."""
+        """Save search results to cache using msgspec."""
         logger.debug(f'Attempting to save web search result to cache (Key: {cache_key})')
-        
+        encoder = msgspec.msgpack.Encoder() # 인코더 정의
+
         try:
-            redis = await conn_manager.get_redis_async_connection()
-            serialized_data: str = json.dumps(data)
-            serialized_bytes: bytes = serialized_data.encode('utf-8')
-            
-            time.time()
-            await redis.setex(cache_key, self.cache_ttl, serialized_bytes)
-            
-            logger.debug(f'Successfully saved result to cache (Key: {cache_key}, TTL: {self.cache_ttl}s)')
+            # msgspec으로 직렬화
+            serialized_bytes: bytes = encoder.encode(data)
+
+            async with redis_async_connection() as redis: # 컨텍스트 관리자 사용
+                await redis.setex(cache_key, self.cache_ttl, serialized_bytes)
+
+            logger.debug(f'Successfully saved result to cache (Key: {cache_key}, TTL: {self.cache_ttl}s) (using msgspec)')
             return True
-            
+        except (msgspec.EncodeError, TypeError) as encode_err:
+            logger.error(f"Failed to encode data to msgpack for key '{cache_key}': {encode_err}")
+            metrics.track_cache('errors', cache_type='web_search', error_type='encode_error')
+            return False
         except Exception as e:
             logger.warning(
-                f'Failed to save result to web search cache (Key: {cache_key}): {str(e)}', 
-                extra={'cache_key': cache_key}, 
+                f'Failed to save result to web search cache (Key: {cache_key}): {str(e)}',
+                extra={'cache_key': cache_key},
                 exc_info=e
             )
             return False

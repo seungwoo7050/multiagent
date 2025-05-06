@@ -2,13 +2,16 @@ import abc
 import asyncio
 import json
 import time
+import msgspec
 from typing import Any, Dict, Generic, Optional, TypeVar, Union, cast
 
 from src.config.connections import get_connection_manager, redis_async_connection
 from src.config.errors import ErrorCode, MemoryError
+from src.core.exceptions import SerializationError
 from src.config.logger import get_logger
 from src.config.metrics import MEMORY_METRICS, get_metrics_manager
 from src.config.settings import get_settings
+
 
 settings = get_settings()
 logger = get_logger(__name__)
@@ -42,41 +45,41 @@ class LLMCache(abc.ABC, Generic[T]):
         pass
 
 class TwoLevelCache(LLMCache[T]):
+    """
+    msgspec 임포트.
+    __init__ 에서 serializer, deserializer 파라미터 제거 및 _msgpack_encoder, _msgpack_decoder 인스턴스 생성.
+    _default_serializer, _default_deserializer 메서드 제거.
+    get 메서드: Redis에서 bytes를 가져온 후 _msgpack_decoder.decode로 역직렬화. 에러 처리 추가. L1 TTL 처리 로직 개선.
+    set 메서드: _msgpack_encoder.encode를 사용하여 value를 직렬화한 후 Redis에 저장. 에러 처리 추가.
+    """
 
-    def __init__(self, namespace: str='llm', local_maxsize: int=1000, ttl: int=3600, serializer: Optional[callable]=None, deserializer: Optional[callable]=None):
+    # __init__ 메서드는 그대로 유지 (serializer, deserializer 파라미터 제거)
+    def __init__(self, namespace: str = 'llm', local_maxsize: int = 1000, ttl: int = 3600):
         self.namespace = namespace
         self.ttl = ttl
         self.local_maxsize = local_maxsize
-        self.serializer = serializer or self._default_serializer
-        self.deserializer = deserializer or self._default_deserializer
+        # serializer/deserializer 인스턴스 변수 제거
         self.hit_count = 0
         self.miss_count = 0
         self.set_count = 0
         self.delete_count = 0
         self.local_cache: Dict[str, Dict[str, Any]] = {}
         self.local_cache_order: list[str] = []
+
+        # msgspec 인코더/디코더 생성 (필요시 훅 포함)
+        # 여기서는 복잡한 타입은 없다고 가정하고 기본 인코더/디코더 사용
+        self._msgpack_encoder = msgspec.msgpack.Encoder()
+        self._msgpack_decoder = msgspec.msgpack.Decoder()
+
         logger.debug(f"Initialized two-level cache with namespace '{namespace}', L1 maxsize={local_maxsize}, default TTL={ttl}s")
 
-    def _default_serializer(self, value: T) -> str:
-        try:
-            return json.dumps(value, default=str)
-        except TypeError as e:
-            logger.error(f'Default serialization failed: {e}. Value type: {type(value)}')
-            raise
-
-    def _default_deserializer(self, serialized: Union[str, bytes]) -> T:
-        try:
-            if isinstance(serialized, bytes):
-                serialized = serialized.decode('utf-8')
-            return json.loads(serialized)
-        except (json.JSONDecodeError, UnicodeDecodeError) as e:
-            logger.error(f'Default deserialization failed: {e}. Data: {serialized[:100]}...')
-            raise
+    # _default_serializer, _default_deserializer 메서드 제거
 
     def _get_redis_key(self, key: str) -> str:
         return f'{self.namespace}:{key}'
 
     def _update_lru_order(self, key: str) -> None:
+        # ... (기존과 동일) ...
         if key in self.local_cache_order:
             self.local_cache_order.remove(key)
         self.local_cache_order.append(key)
@@ -88,6 +91,7 @@ class TwoLevelCache(LLMCache[T]):
     @metrics.timed_metric(MEMORY_METRICS['duration'], {'operation_type': 'cache_get'})
     async def get(self, key: str) -> Optional[T]:
         metrics.track_cache('operations', operation_type='get')
+        # L1 캐시 로직은 동일
         if key in self.local_cache:
             entry = self.local_cache[key]
             expires_at = entry.get('expires_at')
@@ -102,30 +106,50 @@ class TwoLevelCache(LLMCache[T]):
                 self.local_cache.pop(key, None)
                 if key in self.local_cache_order:
                     self.local_cache_order.remove(key)
+
+        # L2 (Redis) 로직 수정
         try:
             async with redis_async_connection() as redis:
                 redis_key = self._get_redis_key(key)
-                serialized = await redis.get(redis_key)
-                time.time()
+                serialized: Optional[bytes] = await redis.get(redis_key) # Redis는 bytes 반환
+
                 if serialized is not None:
-                    value: T = self.deserializer(serialized)
+                    try:
+                        # msgspec으로 역직렬화
+                        value: T = self._msgpack_decoder.decode(serialized)
+                    except (msgspec.DecodeError, TypeError) as decode_err:
+                         logger.error(f"Failed to decode msgpack data from Redis for key '{redis_key}': {decode_err}")
+                         metrics.track_cache('errors', cache_type='redis', error_type='decode_error')
+                         return None # 역직렬화 실패 시 None 반환
+
+                    # --- L1 업데이트 로직 (기존과 유사) ---
                     redis_ttl = await redis.ttl(redis_key)
-                    if redis_ttl == -1:
+                    l1_expires_at: Optional[float] = None # TTL 타입 변경 (float)
+                    if redis_ttl == -1: # No expire
                         l1_expires_at = None
                     elif redis_ttl > 0:
                         l1_expires_at = time.time() + redis_ttl
-                    self.local_cache[key] = {'value': value, 'expires_at': l1_expires_at}
-                    self._update_lru_order(key)
-                    metrics.track_cache('size', cache_type='local', value=len(self.local_cache))
-                    
+                    # TTL이 0 이하이면 (-2: 키 없음, 0: 만료 직전) L1에 저장하지 않음
+                    if redis_ttl >= 0:
+                         self.local_cache[key] = {'value': value, 'expires_at': l1_expires_at}
+                         self._update_lru_order(key)
+                         metrics.track_cache('size', cache_type='local', value=len(self.local_cache))
+                         logger.debug(f'L2 cache hit for key: {key}. Stored/Updated in L1.')
+                    else:
+                        logger.debug(f"Redis key '{redis_key}' has TTL {redis_ttl}, not storing in L1.")
+
+
                     self.hit_count += 1
                     metrics.track_cache('hits', cache_type='redis')
-                    logger.debug(f'L2 cache hit for key: {key}. Stored in L1.')
                     return value
                 else:
+                    logger.debug(f"Cache miss for key '{key}' in L1 and L2 (Redis).")
+                    metrics.track_cache('misses', cache_type='redis')
                     return None
         except Exception as e:
+            # Redis 연결 오류 등 처리
             logger.warning(f"Error retrieving key '{key}' from Redis cache: {str(e)}", exc_info=True)
+            metrics.track_cache('errors', cache_type='redis', error_type=type(e).__name__)
             return None
 
     @metrics.timed_metric(MEMORY_METRICS['duration'], {'operation_type': 'cache_set'})
@@ -135,23 +159,44 @@ class TwoLevelCache(LLMCache[T]):
         l1_expires_at: Optional[float] = None
         if effective_ttl > 0:
             l1_expires_at = time.time() + effective_ttl
+
+        # L1 캐시 업데이트 (기존과 동일)
         self.local_cache[key] = {'value': value, 'expires_at': l1_expires_at}
         self._update_lru_order(key)
         metrics.track_cache('size', cache_type='local', value=len(self.local_cache))
+
+        # L2 (Redis) 업데이트 수정
         try:
+            # msgspec으로 직렬화
+            serialized_value: bytes = self._msgpack_encoder.encode(value)
+
             async with redis_async_connection() as redis:
-                pattern = f'{self.namespace}:*'
-                cursor = '0'
-                deleted = 0
-                while True:
-                    cursor, keys = await redis.scan(cursor=cursor, match=pattern, count=1000)
-                    if keys:
-                        deleted += await redis.delete(*keys)
-                    if cursor == b'0' or int(cursor) == 0:
-                        break
-                return True
+                redis_key = self._get_redis_key(key)
+                if effective_ttl > 0:
+                    success = await redis.setex(redis_key, effective_ttl, serialized_value)
+                else:
+                    success = await redis.set(redis_key, serialized_value)
+
+                if success:
+                    self.set_count += 1
+                    logger.debug(f"Successfully set key '{key}' in Redis cache (TTL: {effective_ttl}s)")
+                    return True
+                else:
+                    logger.warning(f"Redis SET/SETEX command returned failure for key '{key}'")
+                    # 실패 시 L1에서도 제거 고려
+                    self.local_cache.pop(key, None)
+                    if key in self.local_cache_order: self.local_cache_order.remove(key)
+                    return False
+        except (msgspec.EncodeError, TypeError) as encode_err:
+             logger.error(f"Failed to encode value to msgpack for key '{key}': {encode_err}")
+             metrics.track_cache('errors', cache_type='redis', error_type='encode_error')
+             return False
         except Exception as e:
-            logger.warning(f"Error clearing Redis cache namespace '{self.namespace}': {e}")
+            logger.warning(f"Error setting key '{key}' in Redis cache: {str(e)}", exc_info=True)
+            metrics.track_cache('errors', cache_type='redis', error_type=type(e).__name__)
+            # 실패 시 L1에서도 제거 고려
+            self.local_cache.pop(key, None)
+            if key in self.local_cache_order: self.local_cache_order.remove(key)
             return False
     
     @metrics.timed_metric(MEMORY_METRICS['duration'], {'operation_type': 'cache_delete'})

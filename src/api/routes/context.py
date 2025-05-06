@@ -1,26 +1,14 @@
-# --- 수정 후 전체 코드 (필요 import 포함) -------------------------------
 from typing import Any, Dict, Optional, Literal
-
 from fastapi import APIRouter, Body, Depends, HTTPException, Path, Response, status
-from pydantic import BaseModel
+
 from src.api.dependencies import get_memory_manager_dependency
 from src.config.logger import get_logger
 from src.memory.manager import MemoryManager
+from src.schemas.response_models import ContextResponse, ContextOperationResponse # 추가됨
 
 router = APIRouter(prefix="/contexts", tags=["Context Management"])
 logger = get_logger(__name__)
 
-# ---------- Pydantic Models ----------
-class ContextResponse(BaseModel):
-    context_id: str
-    data: Dict[str, Any]
-
-class ContextOperationResponse(BaseModel):
-    context_id: str
-    status: Literal["created", "updated"]
-    message: str
-
-# ---------- End-points ----------
 @router.get(
     "/{context_id}",
     response_model=ContextResponse,

@@ -3,7 +3,11 @@ from enum import Enum
 from typing import Any, Dict, Optional, Literal, Union
 from fastapi import APIRouter, Body, Depends, HTTPException, status, Response
 from pydantic import BaseModel
-from src.api.schemas.task import CreateTaskRequest
+
+from src.schemas.request_models import CreateTaskRequest # 변경됨
+from src.schemas.response_models import TaskSubmittedResponse, TaskStatusResponse # 변경됨
+from src.schemas.enums import TaskState # 변경됨
+
 from src.api.dependencies import get_orchestrator_dependency_implementation
 from src.config.logger import get_logger
 from src.utils.ids import generate_task_id
@@ -12,23 +16,6 @@ from src.orchestration.orchestrator import Orchestrator
 router = APIRouter(prefix="/tasks", tags=["Tasks"])
 logger = get_logger(__name__)
 
-# ---------- Pydantic Models ----------
-class TaskSubmittedResponse(BaseModel):
-    task_id: str
-    status: Literal["submitted"]
-
-class TaskState(str, Enum):
-    PENDING = "PENDING"
-    RUNNING = "RUNNING"
-    COMPLETED = "COMPLETED"
-    FAILED = "FAILED"
-
-class TaskStatusResponse(BaseModel):
-    """Response model for task status"""
-    id: str  # Changed from task_id to id for test compatibility
-    state: TaskState  # Changed from status to state for test compatibility  
-    result: Optional[Dict[str, Any]] = None
-    error: Optional[Union[str, Dict[str, Any]]] = None
 
 # ---------- End-points ----------
 @router.post(

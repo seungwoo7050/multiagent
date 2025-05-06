@@ -120,7 +120,7 @@ from typing import Optional, Set
 
 # Import settings directly to avoid circular imports
 # This works because we're not creating a settings instance here
-from src.config.settings import Settings
+from src.schemas.config import AppSettings
 
 # Cache of standard LogRecord attributes to avoid repeated lookups
 STANDARD_LOGRECORD_ATTRIBUTES: Set[str] = {
@@ -266,7 +266,7 @@ class ContextLoggerAdapter(logging.LoggerAdapter):
         return (msg, kwargs)
 
 
-def setup_logging(settings: Optional[Settings] = None) -> None:
+def setup_logging(settings: Optional[AppSettings] = None) -> None:
     """
     Set up logging for the application.
     

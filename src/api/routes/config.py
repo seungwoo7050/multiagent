@@ -8,7 +8,7 @@ from typing import Any, Dict, Set
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from src.config.logger import get_logger
-from src.config.settings import Settings, get_settings
+from src.config.settings import get_settings
 
 logger = get_logger(__name__)
 
@@ -35,7 +35,7 @@ SENSITIVE_MODEL_FIELDS: Set[str] = {
 }
 
 # 의존성 주입 함수
-def get_settings_dependency() -> Settings:
+def get_settings_dependency() -> Any:
     # get_settings()는 이미 캐싱되므로 여기서는 간단히 호출
     return get_settings()
 
@@ -48,7 +48,7 @@ def get_settings_dependency() -> Settings:
     description="Retrieves the current system configuration settings, excluding sensitive information like API keys and passwords."
 )
 async def get_system_configuration(
-    settings: Settings = Depends(get_settings_dependency)
+    settings: Any = Depends(get_settings_dependency)
 ):
     """
     현재 활성화된 시스템 설정을 반환합니다.
