@@ -27,5 +27,5 @@ export PYTHONPATH=.
 # pytest -q --disable-warnings -p no:logging --tb=short "$TEST_PATH"
 
 # 6) maxfail
-pytest --disable-warnings --maxfail=1 "$TEST_PATH" # > ~/Desktop/pytestlog.txt
+pytest --disable-warnings "$TEST_PATH" # > ~/Desktop/pytestlog.txt
 # pytest -qq --disable-warnings -rN --maxfail=1 "$TEST_PATH" > ~/Desktop/pytestlog.txt

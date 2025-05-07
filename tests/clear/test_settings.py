@@ -1,5 +1,6 @@
 import pytest
 import os
+from src.config.settings import get_settings
 from src.schemas.config import AppSettings, LLMProviderSettings
 from pydantic import ValidationError
 
@@ -21,17 +22,13 @@ def test_config_loading_success():
 
 def test_config_validation_failure():
     """설정 유효성 검사 실패 케이스 테스트"""
-    # 일부러 필수 환경 변수 누락시켜 ValidationError 발생 유도
-    os.environ.pop("PRIMARY_LLM_PROVIDER", None) # 확실히 제거
-    os.environ.pop("LLM_PROVIDERS__test_provider__API_KEY", None)
-    os.environ.pop("LLM_PROVIDERS__test_provider__MODEL_NAME", None)
-    os.environ.pop("DEFAULT_REQUEST_TIMEOUT", None)
-    os.environ.pop("LLM_MAX_RETRIES", None)
-
-    with pytest.raises(ValidationError) as exc_info:
-        AppSettings() # 필수 환경 변수 누락
+    get_settings.cache_clear()
+    from src.schemas.config import AppSettings
     
-    # ValidationError가 발생했는지 추가적으로 검증할 수 있습니다.
-    # 예를 들어, errors() 메서드를 사용하여 어떤 필드에서 오류가 발생했는지 확인할 수 있습니다.
-    # errors = exc_info.value.errors()
-    # assert len(errors) > 0
+    # Remove required environment variables
+    os.environ.pop("PRIMARY_LLM_PROVIDER", None)
+    os.environ.pop("LLM_PROVIDERS", None)
+    
+    with pytest.raises(ValidationError):
+        # You need to actually create an instance here
+        AppSettings(_env_file=None)  # This line was missing

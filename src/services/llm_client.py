@@ -63,35 +63,70 @@ class LLMClient:
         self,
         messages: List[Dict[str, str]],
         model_name: Optional[str] = None,
+        temperature: Optional[float] = None,
+        max_tokens: Optional[int] = None,
+        **kwargs: Any
     ) -> str:
         """
         LLM에게 메시지 목록을 전달하고 응답을 받음 (재시도 및 오류 처리 포함)
         """
+        from tenacity import retry, stop_after_attempt, wait_exponential, RetryError
+        
+        # 모델 인스턴스 결정
+        if model_name:
+            target_provider = settings.LLM_MODEL_PROVIDER_MAP.get(model_name, settings.PRIMARY_LLM_PROVIDER)
+            llm_client_instance = self._create_llm_client_with_specific_model(target_provider, model_name)
+        else:
+            llm_client_instance = self.primary_llm
+        
+        # LLM 호출 파라미터 구성
+        invoke_params = {}
+        
+        # 안전하게 provider_name 접근 (테스트 환경 고려)
+        provider_name = getattr(llm_client_instance, 'provider_name', settings.PRIMARY_LLM_PROVIDER)
+        provider_config = settings.LLM_PROVIDERS.get(provider_name)
+        
+        if provider_config:
+            if temperature is not None:
+                invoke_params['temperature'] = temperature
+            else:
+                invoke_params['temperature'] = getattr(provider_config, 'temperature', 
+                                                    getattr(llm_client_instance, 'temperature', 0.7))
+            
+            if max_tokens is not None:
+                invoke_params['max_tokens'] = max_tokens
+            else:
+                invoke_params['max_tokens'] = getattr(provider_config, 'max_tokens', 
+                                                    getattr(llm_client_instance, 'max_tokens', 1024))
+        
+        # 추가 파라미터 병합
+        invoke_params.update(kwargs)
+        
         async def _invoke():
-            llm = (
-                self.primary_llm
-                if not model_name
-                else self._create_llm_client(model_name)
-            )
             try:
-                response = await llm.ainvoke(messages)
+                response = await llm_client_instance.ainvoke(messages, **invoke_params)
                 if hasattr(response, "content"):
                     return response.content
                 if isinstance(response, str):
                     return response
                 return str(response)
             except Exception as e:
-                logger.error(f"LLM 호출 실패 (모델: {llm.model_name}): {e}")
+                logger.error(f"LLM 호출 실패 (모델: {getattr(llm_client_instance, 'model_name', 'unknown')}): {e}")
                 raise e
-
+        
         try:
+            # 원래 코드의 방식으로 retry 데코레이터 사용
             invoked = retry(
-                wait=wait_exponential(),
-                stop=stop_after_attempt(int(settings.LLM_MAX_RETRIES + 1)),
+                wait=wait_exponential(multiplier=1, min=1, max=10),
+                stop=stop_after_attempt(int(settings.LLM_MAX_RETRIES) + 1),
+                reraise=True
             )(_invoke)
             return await invoked()
+        
         except RetryError as e:
-            raise LLMError(message=f"LLM 호출 실패: {e}", original_error=e)
+            raise LLMError(message=f"LLM 호출 모든 재시도 실패: {e}", original_error=e)
+        except Exception as e:
+            raise LLMError(message=f"LLM 호출 실패 (재시도 전): {e}", original_error=e)
 
     async def chat(self, messages: List[Dict[str, str]]) -> str:
         """주 LLM을 사용하여 채팅 형식으로 메시지를 전달하고 응답을 받음"""
