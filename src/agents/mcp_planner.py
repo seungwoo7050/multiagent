@@ -14,7 +14,7 @@ from src.core.mcp.adapters.llm_adapter import (LLMAdapter, LLMInputContext,
                                                LLMOutputContext)
 from src.core.mcp.schema import TaskContext
 from src.core.task import TaskResult  # Added missing import
-from src.tools.registry import ToolRegistry
+from src.tools.registry import ToolManager
 
 # Get settings instance
 settings = get_settings()
@@ -28,7 +28,7 @@ class MCPPlannerAgent(BaseAgent):
         super().__init__(config)
         self.context_manager = AgentContextManager(agent_id=self.config.name)
         self.llm_adapter = LLMAdapter()
-        self.tool_registry = tool_registry or ToolRegistry()
+        self.tool_registry = tool_registry or ToolManager()
 
 
 

@@ -13,7 +13,7 @@ from src.core.agent import AgentResult, AgentState, BaseAgent
 from src.core.exceptions import TaskError
 from src.core.mcp.adapters.llm_adapter import LLMAdapter, LLMInputContext
 from src.core.task import TaskResult
-from src.tools.registry import ToolRegistry
+from src.tools.registry import ToolManager
 from src.tools.runner import ToolRunner
 
 settings = get_settings()
@@ -21,14 +21,14 @@ logger: ContextLoggerAdapter = get_logger_with_context(__name__)
 
 class MCPExecutorAgent(BaseAgent):
 
-    def __init__(self, config: AgentConfig, tool_registry: Optional[ToolRegistry]=None):
+    def __init__(self, config: AgentConfig, tool_registry: Optional[ToolManager]=None):
         if config.agent_type not in ['mcp_executor', 'executor']:
             logger.warning(f'MCPExecutorAgent initialized with potentially mismatched config type: {config.agent_type}')
         super().__init__(config)
         self.context_manager = AgentContextManager(agent_id=self.config.name)
         self.llm_adapter = LLMAdapter()
         self.tool_runner = ToolRunner()
-        self.tool_registry = tool_registry if tool_registry is not None else ToolRegistry()
+        self.tool_registry = tool_registry if tool_registry is not None else ToolManager()
         self.max_react_iterations = self.config.parameters.get('max_react_iterations', 5)
         
     def get_tool_descriptions(self, tool_names):

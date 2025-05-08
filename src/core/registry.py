@@ -151,7 +151,7 @@ class ClassRegistry(Registry[Type[Any]]):
 _registries: Dict[str, Registry[Any]] = {}
 _registries_lock = threading.RLock()  # Global lock for registry dictionary
 
-def get_registry(name: str, registry_type: str='generic') -> Registry[Any]:
+def get_tool_manager(name: str, registry_type: str='generic') -> Registry[Any]:
     registry_key = f'{name}:{registry_type}'
     
     with _registries_lock:
@@ -201,9 +201,9 @@ def clear_all_registries() -> None:
     logger.info('Finished clearing all registries.')
 
 def get_function_registry(name: str) -> FunctionRegistry:
-    registry = get_registry(name, 'function')
+    registry = get_tool_manager(name, 'function')
     return cast(FunctionRegistry, registry)
 
 def get_class_registry(name: str) -> ClassRegistry:
-    registry = get_registry(name, 'class')
+    registry = get_tool_manager(name, 'class')
     return cast(ClassRegistry, registry)

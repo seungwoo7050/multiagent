@@ -1,0 +1,30 @@
+{
+    "name": "ReactToolAgentWorkflow",
+    "description": "A workflow using GenericLLMNode with ReAct pattern and dynamic tool calling.",
+    "entry_point": "react_agent_node",
+    "nodes": [
+      {
+        "id": "react_agent_node",
+        "node_type": "generic_llm_node",
+        "parameters": {
+          "prompt_template_path": "generic/react_tool_agent.txt",
+          "output_field_name": "final_answer",
+          "input_keys_for_prompt": ["original_input", "scratchpad", "tool_call_history", "available_tools"],
+          "enable_tool_use": true, 
+          "allowed_tools": ["web_search", "calculator", "datetime"],
+          "model_name": null,
+          "temperature": 0.3,
+          "max_tokens": 1000,
+          "max_react_iterations": 5,
+          "node_id": "react_tool_agent" 
+        }
+      }
+    ],
+    "edges": [
+      {
+        "type": "standard",
+        "source": "react_agent_node",
+        "target": "__end__"
+      }
+    ]
+}

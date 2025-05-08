@@ -1,4 +1,5 @@
 import pytest
+import os
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, mock_open, patch
 
@@ -10,6 +11,7 @@ from src.agents.graph_nodes.thought_generator_node import ThoughtGeneratorNode
 from src.agents.graph_nodes.state_evaluator_node import StateEvaluatorNode
 from src.agents.graph_nodes.search_strategy_node import SearchStrategyNode
 from src.config.settings import get_settings
+from src.services.tool_manager import ToolManager
 
 
 # --- 테스트용 Fixtures ---
@@ -28,6 +30,10 @@ def mock_llm_client():
     return client
 
 @pytest.fixture
+def mock_tool_manager():
+    return MagicMock(spec=ToolManager)
+
+@pytest.fixture
 def initial_agent_graph_state():
     """테스트용 초기 AgentGraphState 객체를 생성합니다."""
     return AgentGraphState(
@@ -38,7 +44,7 @@ def initial_agent_graph_state():
 
 # --- GenericLLMNode 테스트 ---
 @pytest.mark.asyncio
-async def test_generic_llm_node_execution_success(mock_llm_client, initial_agent_graph_state):
+async def test_generic_llm_node_execution_success(mock_llm_client, mock_tool_manager, initial_agent_graph_state):
     """GenericLLMNode가 성공적으로 실행되고 상태를 업데이트하는지 테스트합니다."""
     prompt_content = "User: {original_input} AI:"
     # Patch 'open' to mock file reading
@@ -49,6 +55,7 @@ async def test_generic_llm_node_execution_success(mock_llm_client, initial_agent
             with patch("src.agents.graph_nodes.generic_llm_node.settings", PROMPT_TEMPLATE_DIR="dummy_prompts"):
                 node = GenericLLMNode(
                     llm_client=mock_llm_client,
+                    tool_manager=mock_tool_manager,
                     prompt_template_path="test_prompt.txt", # 경로는 실제 로직에 맞게
                     output_field_name="dynamic_data.llm_result",
                     input_keys_for_prompt=["original_input"],
@@ -74,7 +81,7 @@ async def test_generic_llm_node_execution_success(mock_llm_client, initial_agent
                 assert output_state_update.get("error_message") is None
 
 @pytest.mark.asyncio
-async def test_generic_llm_node_llm_failure(mock_llm_client, initial_agent_graph_state):
+async def test_generic_llm_node_llm_failure(mock_llm_client, mock_tool_manager, initial_agent_graph_state):
     """GenericLLMNode가 LLM 호출 실패 시 에러 메시지를 상태에 기록하는지 테스트합니다."""
     prompt_content = "Prompt: {original_input}"
     with patch("builtins.open", mock_open(read_data=prompt_content)):
@@ -82,6 +89,7 @@ async def test_generic_llm_node_llm_failure(mock_llm_client, initial_agent_graph
             with patch("src.agents.graph_nodes.generic_llm_node.settings", PROMPT_TEMPLATE_DIR="dummy_prompts"):
                 node = GenericLLMNode(
                     llm_client=mock_llm_client,
+                    tool_manager=mock_tool_manager,
                     prompt_template_path="fail_prompt.txt",
                     output_field_name="dynamic_data.llm_result",
                     input_keys_for_prompt=["original_input"],

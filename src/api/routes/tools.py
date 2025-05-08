@@ -11,8 +11,8 @@ from pydantic import BaseModel, Field
 
 from src.config.errors import ERROR_TO_HTTP_STATUS, ErrorCode, ToolError
 from src.config.logger import get_logger
-from src.tools.registry import ToolRegistry
-from src.tools.registry import get_registry as get_tool_registry
+from src.tools.registry import ToolManager
+from src.tools.registry import get_tool_manager as get_tool_registry
 from src.tools.runner import ToolRunner
 from src.schemas.request_models import ToolExecutionRequest # 추가됨
 from src.schemas.response_models import ( # 추가됨
@@ -31,12 +31,12 @@ router = APIRouter(
     tags=["Tool Management & Execution"]
 )
 
-async def get_tool_registry_dependency() -> ToolRegistry:
+async def get_tool_registry_dependency() -> ToolManager:
     try:
-        # 'global_tools' 이름으로 ToolRegistry 인스턴스 가져오기 (app.py에서 설정한 이름과 일치 필요)
+        # 'global_tools' 이름으로 ToolManager 인스턴스 가져오기 (app.py에서 설정한 이름과 일치 필요)
         return get_tool_registry('global_tools')
     except Exception as e:
-        logger.error(f"Failed to get ToolRegistry dependency: {e}", exc_info=True)
+        logger.error(f"Failed to get ToolManager dependency: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Tool service initialization failed."
@@ -54,7 +54,7 @@ async def get_tool_runner_dependency() -> ToolRunner:
     description="Retrieves a list of all tools registered in the system with basic information."
 )
 async def list_available_tools(
-    tool_registry: ToolRegistry = Depends(get_tool_registry_dependency)
+    tool_registry: ToolManager = Depends(get_tool_registry_dependency)
 ):
     """
     시스템에 등록된 모든 도구의 이름, 설명 및 간단한 인자 스키마 요약을 반환합니다.
@@ -84,7 +84,7 @@ async def list_available_tools(
 
 # /tools/{tool_name} (GET): 특정 도구의 상세 정보 반환
 @router.get("/{tool_name}")
-async def get_tool_details(tool_name: str, tool_registry: ToolRegistry = Depends(get_tool_registry_dependency)):
+async def get_tool_details(tool_name: str, tool_registry: ToolManager = Depends(get_tool_registry_dependency)):
     try:
         if tool_name not in tool_registry.get_names():  
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Tool '{tool_name}' not found.")
@@ -138,7 +138,7 @@ async def get_tool_details(tool_name: str, tool_registry: ToolRegistry = Depends
 async def execute_tool(
     tool_name: str,
     body: ToolExecutionRequest,
-    registry: ToolRegistry = Depends(get_tool_registry_dependency),
+    registry: ToolManager = Depends(get_tool_registry_dependency),
     runner: ToolRunner = Depends(get_tool_runner_dependency),
 ):
     if tool_name not in registry.get_names():

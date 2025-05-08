@@ -155,7 +155,7 @@ class AgentFactory:
             if agent_type == 'mcp_executor':
                 try:
                     from src.tools.registry import \
-                        get_registry as get_tool_registry
+                        get_tool_manager as get_tool_registry
                     constructor_args['tool_registry'] = get_tool_registry('global_tools')
                     logger.debug(f"Injecting tool_registry into {agent_type} '{agent_name}'")
                 except ImportError:

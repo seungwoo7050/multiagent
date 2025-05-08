@@ -27,7 +27,7 @@ from src.orchestration.orchestration_worker_pool import WorkerPoolType
 from src.orchestration.orchestrator import \
     get_orchestrator  # Import the core orchestrator getter
 from src.orchestration.scheduler import get_scheduler
-from src.tools.registry import get_registry as get_tool_registry
+from src.services.tool_manager import get_tool_manager
 from src.schemas.response_models import HealthCheckResponse
 
 
@@ -169,49 +169,23 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
         # Tool Registration (Triggered by imports at top, verified here)
         try:
-            logger.info("Verifying Tool Registration...")
-            tool_registry = get_tool_registry('global_tools') # Get instance to verify
-            try:
-                # 필요한 도구 클래스들을 import 합니다. (파일 상단에도 import 구문이 있지만, 여기서 다시 명시해도 괜찮습니다)
-                from src.tools.calculator import CalculatorTool
-                from src.tools.datetime_tool import DateTimeTool
-                from src.tools.web_search import WebSearchTool
-                from src.tools.web_search_google import GoogleSearchTool
+            logger.info("Loading tools dynamically...")
+            # ToolManager 인스턴스 가져오기 (이름은 'global_tools' 또는 사용하는 이름으로)
+            tool_manager = get_tool_manager('global_tools') # src.services.tool_manager에서 import 필요
 
-                # 추가적인 도구 클래스가 있다면 여기에 import 하세요
+            # 도구가 있는 디렉토리 경로 지정 (프로젝트 구조에 맞게 확인/조정 필요)
+            # 이 경로는 app.py 파일의 위치를 기준으로 하거나, 절대 경로를 사용해야 할 수 있습니다.
+            # 예: 프로젝트 루트에 src 폴더가 있고 그 아래 tools가 있다면 'src/tools'
+            tool_directory = 'src/tools' # !!!! 실제 프로젝트 구조에 맞게 정확한 경로 지정 !!!!
 
-                tools_to_register = [
-                    CalculatorTool,
-                    DateTimeTool,
-                    WebSearchTool,
-                    GoogleSearchTool
-                    # 추가한 도구 클래스를 이 리스트에 넣으세요
-                ]
-
-                logger.info(f"Explicitly registering {len(tools_to_register)} tools...")
-                registered_count = 0
-                for tool_cls in tools_to_register:
-                    try:
-                        tool_registry.register(tool_cls)
-                        registered_count += 1
-                        logger.debug(f"Registered tool: {tool_cls.__name__}")
-                    except Exception as reg_err:
-                        # 이미 등록되었거나 다른 이유로 실패할 경우 로그 남기기
-                        logger.error(f"Failed to register tool {tool_cls.__name__}: {reg_err}", exc_info=True)
-                logger.info(f"Explicit tool registration complete. Registered: {registered_count}/{len(tools_to_register)}")
-
-            except ImportError as import_err:
-                logger.error(f"Could not import tool classes for explicit registration: {import_err}")
-            except Exception as general_err:
-                logger.error(f"An error occurred during explicit tool registration: {general_err}", exc_info=True)
-            # --- 명시적 도구 등록 끝 ---
-            registered_tools = tool_registry.list_tools() # Get list of registered tools
-            if registered_tools:
-                 logger.info(f"Tools registered in 'global_tools' registry: {[tool['name'] for tool in registered_tools]}")
-            else:
-                 logger.warning("No tools seem to be registered. Check tool module imports and @register_tool() decorators.")
+            # 동적 로딩 메서드 호출
+            imported_count = tool_manager.load_tools_from_directory(tool_directory)
+            logger.info(f"Dynamically loaded {imported_count} tool modules. "
+                        f"Registered tools: {list(tool_manager.get_names())}") # 로드 후 등록된 도구 이름 로깅
         except Exception as e:
-            logger.error(f"Error during Tool Registration verification: {e}", exc_info=True)
+            # 만약 도구 로딩 실패가 치명적이라면 여기서 애플리케이션 시작을 중단시킬 수도 있습니다.
+            logger.error(f"CRITICAL: Error during dynamic tool loading from '{tool_directory}': {e}", exc_info=True)
+            # raise RuntimeError("Failed to load essential tools during startup.") from e
 
         # 3. Explicit Component Initialization
         logger.info("Starting explicit component initialization...")
@@ -224,7 +198,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
             "Worker Pool (default)": lambda: get_worker_pool('default', WorkerPoolType.QUEUE_ASYNCIO),
             "Task Queue": lambda: get_worker_pool('default', WorkerPoolType.QUEUE_ASYNCIO).task_queue, # Assuming worker pool holds queue reference or get queue directly
             "Agent Factory": get_agent_factory,
-            "Tool Registry (global_tools)": lambda: get_tool_registry('global_tools'),
+            "Tool Registry (global_tools)": lambda: get_tool_manager('global_tools'),
             # "Flow Controller": get_flow_controller, # Initialize if needed globally at startup
             "Orchestrator": get_orchestrator # Initialize orchestrator last, ensuring its deps are available
         }

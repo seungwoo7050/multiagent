@@ -101,9 +101,11 @@ class AgentGraphState(msgspec.Struct, omit_defaults=True, forbid_unknown_fields=
     search_depth: int = 0 # ToT: 현재 탐색 깊이
     max_search_depth: int = 5 # ToT: 최대 탐색 깊이
     
-    # GenericLLMNode 또는 일반적인 LLM 호출 결과 저장용
-    last_llm_input: Optional[Union[str, List[Dict[str, Any]]]] = None # 마지막 LLM 호출 입력
-    last_llm_output: Optional[str] = None # 마지막 LLM 호출 결과
+    # GenericLLMNode 및 ReAct 관련 필드 추가
+    last_llm_input: Optional[Union[str, List[Dict[str, Any]]]] = None
+    last_llm_output: Optional[str] = None
+    scratchpad: str = "" # LLM 생각, Observation 등을 누적 기록
+    tool_call_history: List[Dict] = msgspec.field(default_factory=list) # 도구 호출 이력 저장
     
     # 워크플로우 제어 및 결과
     next_node_override: Optional[str] = None # 특정 다음 노드를 지정 (조건부 엣지 외)

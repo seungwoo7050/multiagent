@@ -20,6 +20,7 @@ from src.agents.graph_nodes.generic_llm_node import GenericLLMNode
 from src.agents.graph_nodes.thought_generator_node import ThoughtGeneratorNode
 from src.agents.graph_nodes.state_evaluator_node import StateEvaluatorNode
 from src.agents.graph_nodes.search_strategy_node import SearchStrategyNode
+from src.services.tool_manager import ToolManager
 
 
 # --- 테스트용 Fixtures ---
@@ -34,9 +35,13 @@ def mock_llm_client_for_orchestrator():
     return client
 
 @pytest.fixture
-def orchestrator_instance(mock_llm_client_for_orchestrator):
+def mock_tool_manager():
+    return MagicMock(spec=ToolManager)
+
+@pytest.fixture
+def orchestrator_instance(mock_llm_client_for_orchestrator, mock_tool_manager):
     """테스트용 Orchestrator 인스턴스를 생성합니다."""
-    return Orchestrator(llm_client=mock_llm_client_for_orchestrator)
+    return Orchestrator(llm_client=mock_llm_client_for_orchestrator, tool_manager=mock_tool_manager)
 
 @pytest.fixture
 def simple_graph_config_content():
@@ -209,7 +214,7 @@ async def test_orchestrator_run_tot_workflow_mocked_llm(orchestrator_instance, t
                 return "Score: 0.99, Reasoning: Beta is excellent, finish."
             return "Score: 0.5, Reasoning: Default mock eval."
         
-        return "Score: 0.0, Reasoning: Unexpected request but valid format."
+        return "Score: 0.96, Reasoning: Unexpected request but valid format."
     
     mock_llm_responses.call_count = 0
     orchestrator_instance.llm_client.generate_response.side_effect = mock_llm_responses
