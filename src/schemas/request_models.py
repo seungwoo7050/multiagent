@@ -2,50 +2,45 @@
 API 요청에 사용되는 Pydantic 모델 정의
 """
 from typing import Any, Dict, Optional, Union
-from pydantic import BaseModel, Field, field_validator
-from src.schemas.enums import TaskPriority
+from pydantic import BaseModel, Field # , field_validator # TaskPriority 관련 validator는 제거
+# from src.schemas.enums import TaskPriority # TaskPriority 제거
 
-class CreateTaskRequest(BaseModel):
-    """'/tasks' 엔드포인트에 대한 작업 생성 요청 모델"""
-    goal: str = Field(..., description="작업의 최종 목표")
-    task_type: Optional[str] = Field(None, description="실행할 작업/에이전트 유형 (예: 'planning', 'code_generation')")
-    input_data: Dict[str, Any] = Field(default_factory=dict, description="작업 실행에 필요한 입력 데이터")
-    priority: TaskPriority = Field(default=TaskPriority.NORMAL, description="작업 우선순위 (LOW, NORMAL, HIGH, CRITICAL 또는 정수 1-4)")
-    metadata: Optional[Dict[str, Any]] = Field(default_factory=dict, description="추가 메타데이터")
-    
-    # priority 필드에 대한 validator 추가
-    @field_validator('priority', mode='before')
-    @classmethod
-    def validate_priority(cls, v: Union[TaskPriority, int, str]) -> TaskPriority:
-        """입력값을 TaskPriority Enum으로 변환하고 유효성을 검사합니다."""
-        if isinstance(v, TaskPriority):
-            return v
-        if isinstance(v, str):
-            # 대소문자 구분 없이 문자열 이름으로 Enum 멤버 찾기
-            try:
-                return TaskPriority[v.upper()]
-            except KeyError:
-                # 이름으로 못 찾으면 값(value)으로 시도 (Enum 값이 문자열일 경우)
-                try:
-                    return TaskPriority(v.upper())
-                except ValueError:
-                     raise ValueError(f"Invalid priority string: '{v}'. Must be one of {list(TaskPriority.__members__.keys())}")
-        if isinstance(v, int):
-            # 정수 값을 Enum 멤버로 매핑 (일반적인 관례: LOW=1, NORMAL=2, HIGH=3, CRITICAL=4)
-            mapping = {
-                1: TaskPriority.LOW,
-                2: TaskPriority.NORMAL,
-                3: TaskPriority.HIGH,
-                4: TaskPriority.CRITICAL
-            }
-            if v in mapping:
-                return mapping[v]
-            else:
-                 raise ValueError(f"Invalid integer priority: {v}. Must be 1 (LOW), 2 (NORMAL), 3 (HIGH), or 4 (CRITICAL).")
-        # 허용되지 않는 타입인 경우 에러 발생
-        raise TypeError(f"Invalid type for priority: {type(v)}. Expected TaskPriority, int, or str.")
+# 기존 CreateTaskRequest는 주석 처리 또는 삭제
+# class CreateTaskRequest(BaseModel):
+#     goal: str = Field(..., description="작업의 최종 목표")
+#     task_type: Optional[str] = Field(None, description="실행할 작업/에이전트 유형 (예: 'planning', 'code_generation')")
+#     input_data: Dict[str, Any] = Field(default_factory=dict, description="작업 실행에 필요한 입력 데이터")
+#     priority: TaskPriority = Field(default=TaskPriority.NORMAL, description="작업 우선순위 (LOW, NORMAL, HIGH, CRITICAL 또는 정수 1-4)")
+#     metadata: Optional[Dict[str, Any]] = Field(default_factory=dict, description="추가 메타데이터")
+#
+#     @field_validator('priority', mode='before')
+#     @classmethod
+#     def validate_priority(cls, v: Union[TaskPriority, int, str]) -> TaskPriority:
+#         # ... (기존 검증 로직) ...
 
+class RunWorkflowRequest(BaseModel):
+    """
+    `/run` 엔드포인트에 대한 워크플로우 실행 요청 모델.
+    실행할 그래프 설정 이름과 초기 입력을 받습니다.
+    """
+    graph_config_name: str = Field(
+        ...,
+        description="실행할 에이전트 그래프 설정 파일의 이름 (예: 'default_tot_workflow', 'react_tool_workflow'). '.json' 확장자는 제외합니다.",
+        examples=["default_tot_workflow", "react_tool_workflow"]
+    )
+    original_input: Any = Field(
+        ...,
+        description="워크플로우의 주 입력 데이터입니다. 그래프의 첫 노드가 처리할 내용입니다 (예: 사용자 질문, 처리할 데이터 객체 등)."
+    )
+    task_id: Optional[str] = Field(
+        None,
+        description="선택적으로 지정할 작업 ID. 지정하지 않으면 시스템에서 생성됩니다."
+    )
+    initial_metadata: Optional[Dict[str, Any]] = Field(
+        default_factory=dict,
+        description="워크플로우 시작 시 AgentGraphState의 metadata 필드에 전달될 초기 메타데이터입니다."
+    )
 
 class ToolExecutionRequest(BaseModel):
-    """'/tools/{tool_name}/execute' 엔드포인트에 대한 도구 실행 요청 모델"""
+    """'/tools/{tool_name}/execute' 엔드포인트에 대한 도구 실행 요청 모델 (기존 유지)"""
     args: Dict[str, Any] = Field(default_factory=dict, description="도구 실행에 필요한 인자 (도구의 args_schema와 일치해야 함)")

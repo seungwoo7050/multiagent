@@ -21,6 +21,7 @@ from src.agents.graph_nodes.thought_generator_node import ThoughtGeneratorNode
 from src.agents.graph_nodes.state_evaluator_node import StateEvaluatorNode
 from src.agents.graph_nodes.search_strategy_node import SearchStrategyNode
 from src.services.tool_manager import ToolManager
+from src.memory.memory_manager import MemoryManager
 
 
 # --- 테스트용 Fixtures ---
@@ -39,9 +40,13 @@ def mock_tool_manager():
     return MagicMock(spec=ToolManager)
 
 @pytest.fixture
-def orchestrator_instance(mock_llm_client_for_orchestrator, mock_tool_manager):
+def mock_memory_manager():
+    return MagicMock(spec=MemoryManager)
+
+@pytest.fixture
+def orchestrator_instance(mock_llm_client_for_orchestrator, mock_tool_manager, mock_memory_manager):
     """테스트용 Orchestrator 인스턴스를 생성합니다."""
-    return Orchestrator(llm_client=mock_llm_client_for_orchestrator, tool_manager=mock_tool_manager)
+    return Orchestrator(llm_client=mock_llm_client_for_orchestrator, tool_manager=mock_tool_manager, memory_manager=mock_memory_manager)
 
 @pytest.fixture
 def simple_graph_config_content():

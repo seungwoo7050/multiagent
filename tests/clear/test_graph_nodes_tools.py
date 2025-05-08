@@ -25,6 +25,16 @@ def mock_llm_client():
     client.provider_name = "mock_provider" # provider_name 추가
     return client
 
+@pytest.fixture
+def mock_memory_manager():
+    """
+    Conversation history 조회를 담당하는 MemoryManager의 목 객체.
+    get_history() 는 비동기 코루틴이어야 하므로 AsyncMock 으로 정의한다.
+    """
+    mgr = MagicMock()
+    mgr.get_history = AsyncMock(return_value=[])   # 빈 히스토리 반환
+    return mgr
+
 # MockTool 정의 (test_services.py와 중복되므로 conftest.py로 옮기는 것이 좋음)
 class MockToolInput(BaseModel):
     arg1: str = Field(...)
@@ -72,7 +82,7 @@ Instructions: Think -> Act -> Observation. Output JSON {{"action": "...", "actio
 # --- GenericLLMNode 도구 호출 테스트 (테스트 함수 본문은 동일) ---
 
 @pytest.mark.asyncio
-async def test_generic_llm_node_tool_use_disabled(mock_llm_client, mock_tool_manager_with_tools, basic_agent_state):
+async def test_generic_llm_node_tool_use_disabled(mock_llm_client, mock_tool_manager_with_tools, mock_memory_manager, basic_agent_state):
     # ... (기존 테스트 함수 본문 유지) ...
     prompt_content = "Input: {original_input}"
     m = mock_open(read_data=prompt_content)
@@ -87,7 +97,8 @@ async def test_generic_llm_node_tool_use_disabled(mock_llm_client, mock_tool_man
             output_field_name="final_answer",
             input_keys_for_prompt=["original_input"],
             node_id="test_no_tool_node",
-            enable_tool_use=False
+            enable_tool_use=False,
+            memory_manager=mock_memory_manager
         )
         mock_llm_client.generate_response.return_value = "Simple answer without tools"
         result_update = await node(basic_agent_state)
@@ -98,7 +109,7 @@ async def test_generic_llm_node_tool_use_disabled(mock_llm_client, mock_tool_man
         assert result_update.get("final_answer") == "Simple answer without tools"
 
 @pytest.mark.asyncio
-async def test_generic_llm_node_single_tool_call_success(mock_llm_client, mock_tool_manager_with_tools, basic_agent_state, react_prompt_content):
+async def test_generic_llm_node_single_tool_call_success(mock_llm_client, mock_tool_manager_with_tools, mock_memory_manager, basic_agent_state, react_prompt_content):
     # ... (기존 테스트 함수 본문 유지) ...
     m = mock_open(read_data=react_prompt_content)
     with patch("builtins.open", m), \
@@ -113,7 +124,8 @@ async def test_generic_llm_node_single_tool_call_success(mock_llm_client, mock_t
             input_keys_for_prompt=["original_input", "scratchpad", "tool_call_history", "available_tools"],
             node_id="test_single_tool_node",
             enable_tool_use=True,
-            allowed_tools=["calculator"]
+            allowed_tools=["calculator"],
+            memory_manager=mock_memory_manager
         )
         # --- LLM 응답 시나리오 설정 ---
         llm_response_tool_call = json.dumps({"action": "calculator", "action_input": {"expression": "5 + 7"}})
@@ -137,7 +149,7 @@ async def test_generic_llm_node_single_tool_call_success(mock_llm_client, mock_t
 
 
 @pytest.mark.asyncio
-async def test_generic_llm_node_parse_response_formats(mock_llm_client, mock_tool_manager_with_tools):
+async def test_generic_llm_node_parse_response_formats(mock_llm_client, mock_tool_manager_with_tools, mock_memory_manager):
     """LLM 응답 파싱 로직 (JSON, Text) 테스트"""
     with patch.object(GenericLLMNode, '_load_prompt_template', return_value="Dummy template content"):
         node = GenericLLMNode(
@@ -145,7 +157,8 @@ async def test_generic_llm_node_parse_response_formats(mock_llm_client, mock_too
             tool_manager=mock_tool_manager_with_tools,
             prompt_template_path="dummy.txt",
             node_id="test_parser_node",
-            enable_tool_use=True
+            enable_tool_use=True,
+            memory_manager=mock_memory_manager
         )
 
     # 1. 정상 JSON 응답 (```json 포함)

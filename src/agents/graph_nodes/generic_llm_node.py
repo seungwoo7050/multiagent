@@ -14,8 +14,8 @@ from src.config.logger import get_logger
 from src.config.errors import ToolError
 from src.services.llm_client import LLMClient
 from src.services.tool_manager import ToolManager
-# AgentGraphState의 정확한 위치 확인 필요 (여기서는 schemas.mcp_models로 가정)
-from src.schemas.mcp_models import AgentGraphState
+from src.memory.memory_manager import MemoryManager
+from src.schemas.mcp_models import AgentGraphState, ConversationTurn
 
 _bt.os = os
 logger = get_logger(__name__)
@@ -34,7 +34,8 @@ class GenericLLMNode:
     def __init__(
         self,
         llm_client: LLMClient,
-        tool_manager: ToolManager, # ToolManager 주입 받음
+        tool_manager: ToolManager,
+        memory_manager: MemoryManager, # <--- memory_manager 추가
         prompt_template_path: str,
         output_field_name: Optional[str] = None,
         input_keys_for_prompt: Optional[List[str]] = None,
@@ -43,12 +44,15 @@ class GenericLLMNode:
         max_tokens: Optional[int] = None,
         node_id: str = "generic_llm_node",
         max_react_iterations: int = 5,
-        # 도구 사용 관련 설정
-        enable_tool_use: bool = False, # 기본값을 False로 변경 (명시적 활성화 필요)
-        allowed_tools: Optional[List[str]] = None
+        enable_tool_use: bool = False,
+        allowed_tools: Optional[List[str]] = None,
+        history_prompt_key: Optional[str] = "conversation_history", # <--- 프롬프트 내 히스토리 변수명
+        history_key_prefix: Optional[str] = "chat_history",        # <--- 메모리 저장소 내 히스토리 키 접두사
+        max_history_items: Optional[int] = 10                     # <--- 가져올 히스토리 최대 개수
     ):
         self.llm_client = llm_client
         self.tool_manager = tool_manager
+        self.memory_manager = memory_manager # <--- memory_manager 인스턴스 저장
         self.prompt_template_path = prompt_template_path
         self.output_field_name = output_field_name
         self.input_keys_for_prompt = input_keys_for_prompt or []
@@ -57,20 +61,29 @@ class GenericLLMNode:
         self.max_tokens = max_tokens
         self.node_id = node_id
         self.max_react_iterations = max_react_iterations
-        self.enable_tool_use = enable_tool_use # 전달된 값 사용
+        self.enable_tool_use = enable_tool_use
         self.allowed_tools = set(allowed_tools) if allowed_tools is not None else None
 
+        self.history_prompt_key = history_prompt_key # <--- 설정 저장
+        self.history_key_prefix = history_key_prefix # <--- 설정 저장
+        self.max_history_items = max_history_items   # <--- 설정 저장
+
         self.prompt_template_str = self._load_prompt_template()
-        # 프롬프트 변수 설정 시 enable_tool_use 고려
         prompt_vars = list(set(self.input_keys_for_prompt))
         if self.enable_tool_use:
             prompt_vars.extend(['available_tools', 'tool_call_history', 'scratchpad'])
+        if self.history_prompt_key: # <--- 히스토리 키도 프롬프트 변수에 추가
+            prompt_vars.append(self.history_prompt_key)
 
         self.prompt_template = PromptTemplate(
             template=self.prompt_template_str,
-            input_variables=list(set(prompt_vars)) # 중복 제거
+            input_variables=list(set(prompt_vars))
         )
-        logger.info(f"GenericLLMNode '{self.node_id}' initialized. Tool use enabled: {self.enable_tool_use}. Prompt: {prompt_template_path}")
+        logger.info(
+            f"GenericLLMNode '{self.node_id}' initialized. Tool use: {self.enable_tool_use}. "
+            f"History key: '{self.history_prompt_key}', Max items: {self.max_history_items}. Prompt: {prompt_template_path}"
+        )
+
 
     def _load_prompt_template(self) -> str:
         base_prompt_dir = getattr(settings, 'PROMPT_TEMPLATE_DIR', 'config/prompts')
@@ -120,10 +133,47 @@ class GenericLLMNode:
              prompt_lines.append(f"- {summary['name']}: {summary['description']}")
         return "\n".join(prompt_lines)
 
-    def _prepare_prompt_input(self, state: AgentGraphState) -> Dict[str, Any]:
-        """AgentGraphState에서 프롬프트 포맷팅에 필요한 입력을 추출합니다."""
+    async def _load_conversation_history(self, state: AgentGraphState) -> str: # <--- 비동기 함수로 변경
+        """로드 및 포맷된 대화 히스토리를 반환합니다."""
+        if not self.history_prompt_key or not self.history_key_prefix:
+            return "No conversation history configured for retrieval."
+
+        try:
+            # context_id는 일반적으로 task_id 사용
+            context_id = state.task_id
+            if not context_id:
+                logger.warning(f"Node '{self.node_id}': task_id not found in state for history retrieval.")
+                return "History retrieval skipped: task_id is missing."
+
+            history_items: List[ConversationTurn] = await self.memory_manager.get_history(
+                context_id=context_id,
+                history_key_prefix=self.history_key_prefix, # 생성자에서 설정한 접두사 사용
+                limit=self.max_history_items
+            )
+
+            if not history_items:
+                return "No conversation history found."
+
+            # 히스토리 포맷팅 (예시: 간단한 텍스트 형식)
+            formatted_history = []
+            for item in history_items:
+                # ConversationTurn 객체라고 가정, 실제 저장 형식에 따라 접근 방식 수정
+                if isinstance(item, ConversationTurn): # msgspec.Struct는 isintance로 확인
+                    formatted_history.append(f"{item.role.capitalize()}: {item.content}")
+                elif isinstance(item, dict): # 또는 dict로 저장되었다면
+                    formatted_history.append(f"{item.get('role', 'Unknown').capitalize()}: {item.get('content', '')}")
+                else:
+                    formatted_history.append(str(item)) # 최후의 수단
+
+            return "\n".join(formatted_history)
+
+        except Exception as e:
+            logger.error(f"Node '{self.node_id}': Failed to load conversation history: {e}", exc_info=True)
+            return f"Error loading conversation history: {e}"
+
+    async def _prepare_prompt_input(self, state: AgentGraphState) -> Dict[str, Any]: # <--- 비동기 함수로 변경
         prompt_input = {}
-        all_expected_vars = self.prompt_template.input_variables # 현재 프롬프트가 필요로 하는 변수 목록
+        all_expected_vars = self.prompt_template.input_variables
 
         for key in all_expected_vars:
             value = None
@@ -133,12 +183,16 @@ class GenericLLMNode:
             # 2. dynamic_data 딕셔너리에서 찾기
             elif hasattr(state, 'dynamic_data') and isinstance(state.dynamic_data, dict) and key in state.dynamic_data:
                 value = state.dynamic_data[key]
-            # 3. metadata 딕셔너리에서 찾기 (덜 일반적)
+            # 3. metadata 딕셔너리에서 찾기
             elif hasattr(state, 'metadata') and isinstance(state.metadata, dict) and key in state.metadata:
                 value = state.metadata[key]
 
+            # <<< MemoryManager를 사용한 히스토리 로드 시작 >>>
+            if key == self.history_prompt_key and self.history_key_prefix:
+                value = await self._load_conversation_history(state) # <--- 히스토리 로드 호출
+            # <<< MemoryManager를 사용한 히스토리 로드 끝 >>>
             # 특별 처리: 도구 목록 및 이력 (도구 사용 시에만)
-            if self.enable_tool_use:
+            elif self.enable_tool_use: # history_prompt_key 와 중복될 수 있으므로 elif 사용
                 if key == 'available_tools':
                     value = self._get_available_tools_for_prompt()
                 elif key == 'tool_call_history':
@@ -147,26 +201,22 @@ class GenericLLMNode:
                 elif key == 'scratchpad':
                     value = state.dynamic_data.get('scratchpad', "") if isinstance(state.dynamic_data, dict) else ""
 
-            # 값이 None일 경우 처리
             if value is None:
-                # input_keys_for_prompt에 명시된 필수 키가 누락된 경우 경고
-                if key in self.input_keys_for_prompt:
-                    logger.warning(f"Key '{key}' specified in input_keys_for_prompt not found in state for node '{self.node_id}'. Using empty string.")
+                if key in self.input_keys_for_prompt or key == self.history_prompt_key: # 히스토리 키도 필수 간주
+                    logger.warning(f"Key '{key}' for prompt not found in state for node '{self.node_id}'. Using empty string.")
                     prompt_input[key] = ""
-                # 자동으로 추가된 변수(available_tools 등)나 명시되지 않은 키는 빈 문자열
                 else:
                     prompt_input[key] = ""
             else:
-                # 복잡한 객체 문자열 변환
-                if isinstance(value, (list, dict)) and key != 'messages':
+                if isinstance(value, (list, dict)) and key != 'messages': # 'messages'는 LLMInputMessage 리스트일 수 있음
                     try:
                         prompt_input[key] = json.dumps(value, indent=2, default=str)
                     except Exception:
                         prompt_input[key] = str(value)
                 else:
                     prompt_input[key] = value
-
         return prompt_input
+
 
 
     def _parse_llm_response(self, response_str: str) -> Optional[ParsedLLMResponse]:
@@ -213,17 +263,13 @@ class GenericLLMNode:
             logger.error(f"Node '{self.node_id}': Failed to parse LLM response using known formats.")
             return None
 
-    async def __call__(self, state: AgentGraphState, config: Optional[RunnableConfig] = None) -> Dict[str, Any]:
-        """LangGraph 노드 실행 메서드"""
+    async def __call__(self, state: AgentGraphState, config: Optional[RunnableConfig] = None) -> Dict[str, Any]: # <--- 이미 async
         logger.info(f"GenericLLMNode '{self.node_id}' execution started. Tool use enabled: {self.enable_tool_use}")
 
-        # --------------------------------------------------
-        # Case 1: 도구 사용 비활성화 (enable_tool_use is False)
-        # --------------------------------------------------
         if not self.enable_tool_use:
             logger.debug(f"Node '{self.node_id}': Executing simple LLM call (tool use disabled).")
             try:
-                prompt_input_values = self._prepare_prompt_input(state)
+                prompt_input_values = await self._prepare_prompt_input(state) # <--- await 추가
                 formatted_prompt = self.prompt_template.format(**prompt_input_values)
                 logger.debug(f"Node '{self.node_id}': Formatted prompt (tools disabled):\n{formatted_prompt[:500]}...")
 
@@ -301,7 +347,7 @@ class GenericLLMNode:
 
             # --- 1. 프롬프트 준비 ---
             try:
-                prompt_input_values = self._prepare_prompt_input(temp_state_for_prompt)
+                prompt_input_values = await self._prepare_prompt_input(temp_state_for_prompt) # <--- await 추가
                 formatted_prompt = self.prompt_template.format(**prompt_input_values)
                 logger.debug(f"Node '{self.node_id}' Iteration {i+1}: Formatted prompt ready.")
             except Exception as prompt_err:

@@ -30,6 +30,16 @@ def mock_llm_client():
     return client
 
 @pytest.fixture
+def mock_memory_manager():
+    """
+    Conversation history 조회를 담당하는 MemoryManager의 목 객체.
+    get_history() 는 비동기 코루틴이어야 하므로 AsyncMock 으로 정의한다.
+    """
+    mgr = MagicMock()
+    mgr.get_history = AsyncMock(return_value=[])   # 빈 히스토리 반환
+    return mgr
+
+@pytest.fixture
 def mock_tool_manager():
     return MagicMock(spec=ToolManager)
 
@@ -44,7 +54,7 @@ def initial_agent_graph_state():
 
 # --- GenericLLMNode 테스트 ---
 @pytest.mark.asyncio
-async def test_generic_llm_node_execution_success(mock_llm_client, mock_tool_manager, initial_agent_graph_state):
+async def test_generic_llm_node_execution_success(mock_llm_client, mock_tool_manager, mock_memory_manager, initial_agent_graph_state):
     """GenericLLMNode가 성공적으로 실행되고 상태를 업데이트하는지 테스트합니다."""
     prompt_content = "User: {original_input} AI:"
     # Patch 'open' to mock file reading
@@ -56,6 +66,7 @@ async def test_generic_llm_node_execution_success(mock_llm_client, mock_tool_man
                 node = GenericLLMNode(
                     llm_client=mock_llm_client,
                     tool_manager=mock_tool_manager,
+                    memory_manager=mock_memory_manager,
                     prompt_template_path="test_prompt.txt", # 경로는 실제 로직에 맞게
                     output_field_name="dynamic_data.llm_result",
                     input_keys_for_prompt=["original_input"],
@@ -81,7 +92,7 @@ async def test_generic_llm_node_execution_success(mock_llm_client, mock_tool_man
                 assert output_state_update.get("error_message") is None
 
 @pytest.mark.asyncio
-async def test_generic_llm_node_llm_failure(mock_llm_client, mock_tool_manager, initial_agent_graph_state):
+async def test_generic_llm_node_llm_failure(mock_llm_client, mock_tool_manager, mock_memory_manager, initial_agent_graph_state):
     """GenericLLMNode가 LLM 호출 실패 시 에러 메시지를 상태에 기록하는지 테스트합니다."""
     prompt_content = "Prompt: {original_input}"
     with patch("builtins.open", mock_open(read_data=prompt_content)):
@@ -90,6 +101,7 @@ async def test_generic_llm_node_llm_failure(mock_llm_client, mock_tool_manager, 
                 node = GenericLLMNode(
                     llm_client=mock_llm_client,
                     tool_manager=mock_tool_manager,
+                    memory_manager=mock_memory_manager,
                     prompt_template_path="fail_prompt.txt",
                     output_field_name="dynamic_data.llm_result",
                     input_keys_for_prompt=["original_input"],

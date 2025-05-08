@@ -9,8 +9,9 @@ import base64
 # 테스트 대상 함수 및 Enum 임포트
 from src.utils.serialization import (
     serialize, deserialize, serialize_to_json, deserialize_from_json,
-    SerializationFormat, SerializationError
+    SerializationFormat
 )
+from src.config.errors import SystemError, ErrorCode
 
 # 테스트용 Enum 정의
 class Color(Enum):
@@ -178,9 +179,9 @@ def test_pretty_json_serialization():
 
 def test_empty_data_deserialization():
     """빈 데이터 역직렬화 예외 테스트"""
-    with pytest.raises(SerializationError):
+    with pytest.raises(SystemError):
         deserialize(b"", format=SerializationFormat.JSON)
-    with pytest.raises(SerializationError):
+    with pytest.raises(SystemError):
         deserialize(b"", format=SerializationFormat.MSGPACK)
-    with pytest.raises(SerializationError):
+    with pytest.raises(SystemError):
         deserialize(b"", format=SerializationFormat.PICKLE)

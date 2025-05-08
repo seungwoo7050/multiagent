@@ -9,7 +9,7 @@ from enum import Enum
 from typing import Any, Dict, Optional, Type, TypeVar
 import msgspec
 from src.config.logger import get_logger
-from src.core.exceptions import SerializationError
+from src.config.errors import SystemError, ErrorCode
 
 logger = get_logger(__name__)
 
@@ -113,15 +113,17 @@ def serialize(data: Any, format: SerializationFormat = SerializationFormat.MSGPA
         else:
             raise ValueError(f'Unsupported serialization format: {format}')
     except Exception as e:
-        raise SerializationError(
+        raise SystemError(
+            code=ErrorCode.SYSTEM_ERROR, # SYSTEM_ERROR 코드 사용
             message=f'Failed to serialize data using {format.value}: {str(e)}',
+            details={'format': format.value, 'data_type': str(type(data))}, # 상세 정보 추가 가능
             original_error=e
         ) from e
 
 def deserialize(data: bytes, format: SerializationFormat, cls: Optional[Type[T]] = None) -> T:
     """Deserialize bytes to the specified type using the specified format."""
     if not data:
-        raise SerializationError("Cannot deserialize empty data.")
+        raise SystemError("Cannot deserialize empty data.")
 
     target_type = cls if cls else Any
 
@@ -147,8 +149,10 @@ def deserialize(data: bytes, format: SerializationFormat, cls: Optional[Type[T]]
         else:
             raise ValueError(f'Unsupported deserialization format specified: {format}')
     except Exception as e:
-        raise SerializationError(
+        raise SystemError(
+            code=ErrorCode.SYSTEM_ERROR, # SYSTEM_ERROR 코드 사용
             message=f'Failed to deserialize data using {format.value} (target_cls: {cls}): {str(e)}',
+            details={'format': format.value, 'target_cls': str(cls)}, # 상세 정보 추가 가능
             original_error=e
         ) from e
 
@@ -158,9 +162,10 @@ def serialize_to_json(data: Any, pretty: bool = False) -> str:
     try:
         serialized_bytes = serialize(data, format=SerializationFormat.JSON, pretty=pretty)
         return serialized_bytes.decode('utf-8')
-    except SerializationError as e:
-        raise SerializationError(
-            f'Failed to serialize to JSON: {e.message}',
+    except SystemError as e:
+        raise SystemError(
+            code=ErrorCode.SYSTEM_ERROR,
+            message=f'Failed to serialize to JSON: {e.message}',
             original_error=e.original_error
         ) from e
 
@@ -177,9 +182,10 @@ def deserialize_from_json(data: str, cls: Optional[Type[T]] = None) -> T:
                 pass
         
         return result
-    except SerializationError as e:
-        raise SerializationError(
-            f'Failed to deserialize from JSON: {e.message}',
+    except SystemError as e:
+        raise SystemError(
+            code=ErrorCode.SYSTEM_ERROR,
+            message=f'Failed to deserialize from JSON: {e.message}',
             original_error=e.original_error
         ) from e
         

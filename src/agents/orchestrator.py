@@ -15,6 +15,7 @@ from langgraph.graph.graph import CompiledGraph
 from src.config.settings import get_settings
 from src.config.logger import get_logger
 from src.services.llm_client import LLMClient
+from src.memory.memory_manager import MemoryManager
 from src.schemas.mcp_models import AgentGraphState
 from src.schemas.agent_graph_config import AgentGraphConfig, NodeConfig as JsonNodeConfig, EdgeConfig, ConditionalEdgeConfig
 
@@ -40,17 +41,21 @@ REGISTERED_NODE_TYPES: Dict[str, Type[Any]] = {
 
 
 class Orchestrator:
-    # __init__ 수정: ToolManager 인스턴스를 받아서 저장
-    def __init__(self, llm_client: LLMClient, tool_manager: ToolManager):
+    def __init__(self, llm_client: LLMClient, tool_manager: ToolManager, memory_manager: MemoryManager): # <--- memory_manager 추가
         if not isinstance(llm_client, LLMClient):
              raise TypeError("llm_client must be an instance of LLMClient")
         if not isinstance(tool_manager, ToolManager):
              raise TypeError("tool_manager must be an instance of ToolManager")
+        if not isinstance(memory_manager, MemoryManager): # <--- memory_manager 타입 체크 추가
+             raise TypeError("memory_manager must be an instance of MemoryManager")
 
         self.llm_client = llm_client
-        self.tool_manager = tool_manager # ToolManager 인스턴스 저장
+        self.tool_manager = tool_manager
+        self.memory_manager = memory_manager # <--- memory_manager 인스턴스 저장
         self._compiled_graphs: Dict[str, CompiledGraph] = {}
-        logger.info(f"Orchestrator initialized with ToolManager: {tool_manager.name}")
+        logger.info(f"Orchestrator initialized with ToolManager: '{self.tool_manager.name}' and MemoryManager.")
+
+
 
     def _load_graph_config_from_file(self, config_name: str) -> Dict[str, Any]:
         config_dir = Path(getattr(settings, 'AGENT_GRAPH_CONFIG_DIR', 'config/agent_graphs'))
@@ -83,23 +88,33 @@ class Orchestrator:
             raise ValueError(f"Unsupported node_type: '{node_type_str}' for node ID '{node_id}'. Registered types: {list(REGISTERED_NODE_TYPES.keys())}")
 
         try:
-            # 기본 파라미터 설정
             constructor_params = {
                 "llm_client": self.llm_client,
                 "node_id": node_id,
-                **node_params # JSON 설정의 파라미터 우선 적용
+                # **주의**: `node_params`가 `llm_client`, `tool_manager`, `memory_manager` 등의
+                # 핵심 의존성을 덮어쓰지 않도록 순서 조정 또는 명시적 처리 필요.
+                # 여기서는 node_params를 나중에 병합하여 JSON 설정이 우선되도록 함.
             }
 
-            # *** 수정된 부분 시작: GenericLLMNode에 tool_manager 주입 ***
-            if node_type_str == "generic_llm_node":
-                # ToolManager가 이미 주입되지 않았으면 주입
-                if "tool_manager" not in constructor_params:
-                    constructor_params["tool_manager"] = self.tool_manager
-                    logger.debug(f"Injecting ToolManager '{self.tool_manager.name}' into GenericLLMNode '{node_id}'.")
-                else:
-                    # JSON 설정에서 tool_manager를 직접 지정한 경우 (일반적이진 않음)
-                    logger.warning(f"ToolManager specified in JSON parameters for GenericLLMNode '{node_id}'. Using the one from JSON.")
-            # *** 수정된 부분 끝 ***
+            # 공통 의존성 추가
+            if "tool_manager" not in node_params: # JSON에서 명시적으로 제공하지 않은 경우
+                # ToolManager를 필요로 하는 노드 타입인지 확인 (예: GenericLLMNode)
+                # 또는 모든 노드에 기본적으로 제공하고 노드 내부에서 사용 여부 결정
+                sig_params = inspect.signature(node_class.__init__).parameters
+                if 'tool_manager' in sig_params:
+                     constructor_params["tool_manager"] = self.tool_manager
+                     logger.debug(f"Injecting default ToolManager into node '{node_id}' (type: {node_type_str}).")
+
+            if "memory_manager" not in node_params: # JSON에서 명시적으로 제공하지 않은 경우
+                # MemoryManager를 필요로 하는 노드 타입인지 확인 (예: GenericLLMNode)
+                sig_params = inspect.signature(node_class.__init__).parameters
+                if 'memory_manager' in sig_params:
+                    constructor_params["memory_manager"] = self.memory_manager # <--- MemoryManager 주입
+                    logger.debug(f"Injecting default MemoryManager into node '{node_id}' (type: {node_type_str}).")
+
+            # JSON에서 제공된 파라미터 병합 (기본 주입된 의존성을 덮어쓸 수 있음 - 의도된 경우)
+            constructor_params.update(node_params)
+
 
             # 실제 생성자 시그니처 확인하여 유효한 파라미터만 전달
             sig = inspect.signature(node_class.__init__)
@@ -108,31 +123,32 @@ class Orchestrator:
             }
 
             # 누락된 필수 파라미터 확인 (self 제외)
-            required_params = {
+            required_params_in_sig = {
                 p.name for p in sig.parameters.values()
                 if p.default == inspect.Parameter.empty and p.name != 'self'
             }
-            missing_params = required_params - set(valid_params_for_constructor.keys())
+            missing_params = required_params_in_sig - set(valid_params_for_constructor.keys())
             if missing_params:
-                 # llm_client, tool_manager 는 기본 주입 시도 대상이므로 제외하고 에러 표시
-                 critical_missing = missing_params - {"llm_client", "tool_manager"}
+                 # llm_client, tool_manager, memory_manager 는 기본 주입 시도 대상이므로 제외하고 에러 표시
+                 critical_missing = missing_params - {"llm_client", "tool_manager", "memory_manager"}
                  if critical_missing:
-                      raise TypeError(f"Node '{node_id}' (Type: {node_type_str}): Missing required constructor arguments: {critical_missing}")
-                 # llm_client나 tool_manager가 없으면 생성자에서 에러 발생 예상
+                      raise TypeError(f"Node '{node_id}' (Type: {node_type_str}): Missing required constructor arguments: {critical_missing}. Check JSON parameters and node class constructor.")
+
 
             node_instance = node_class(**valid_params_for_constructor)
-            logger.debug(f"Created instance for node ID '{node_id}', type '{node_type_str}'")
+            logger.debug(f"Created instance for node ID '{node_id}', type '{node_type_str}' with params: {list(valid_params_for_constructor.keys())}")
 
             if not callable(node_instance):
                  raise TypeError(f"Node instance for '{node_id}' (type: {node_type_str}) is not callable.")
             return node_instance
 
-        except TypeError as te: # 생성자 인자 오류 명시적 처리
+        except TypeError as te:
              logger.error(f"TypeError creating node instance for ID '{node_id}', type '{node_type_str}': {te}. Check constructor arguments and JSON parameters.", exc_info=True)
              raise RuntimeError(f"Error creating node '{node_id}' due to TypeError: {te}") from te
         except Exception as e:
             logger.error(f"Failed to create node instance for ID '{node_id}', type '{node_type_str}': {e}", exc_info=True)
             raise RuntimeError(f"Error creating node '{node_id}': {e}") from e
+
 
     # --- _get_conditional_router_func, build_graph, get_compiled_graph, run_workflow 메서드는 이전과 동일하게 유지 ---
     # ... (이전 답변의 나머지 Orchestrator 메서드 코드) ...
@@ -321,79 +337,115 @@ class Orchestrator:
         try:
             compiled_graph = self.get_compiled_graph(graph_config_name)
         except Exception as graph_err:
-             logger.error(f"Cannot run workflow: Failed to get compiled graph '{graph_config_name}': {graph_err}", exc_info=True)
-             return AgentGraphState(
-                  task_id=task_id,
-                  original_input=original_input,
-                  metadata=initial_metadata or {},
-                  error_message=f"Failed to load/compile workflow graph '{graph_config_name}': {graph_err}"
-             )
-
-        initial_state = AgentGraphState(
-            task_id=task_id,
-            original_input=original_input,
-            metadata=initial_metadata or {},
-            max_search_depth=initial_metadata.get('max_search_depth', 5) if initial_metadata else 5
-        )
-
-        initial_state_dict = {}
-        try:
-            # msgspec Struct -> dict 수동 변환
-            encoder = msgspec.msgpack.Encoder()
-            decoder = msgspec.msgpack.Decoder(Dict[str, Any])
-            initial_state_dict = decoder.decode(encoder.encode(initial_state))
-            logger.debug(f"Initial state dict for workflow '{graph_config_name}': {initial_state_dict}")
-        except Exception as dump_err:
-            logger.error(f"Failed to convert initial state to dict for logging/invocation: {dump_err}")
-            # 치명적 오류로 간주하고 종료
+            logger.error(f"Cannot run workflow: Failed to get compiled graph '{graph_config_name}': {graph_err}", exc_info=True)
             return AgentGraphState(
                  task_id=task_id,
                  original_input=original_input,
                  metadata=initial_metadata or {},
-                 error_message=f"Failed to prepare initial state: {dump_err}"
+                 error_message=f"Failed to load/compile workflow graph '{graph_config_name}': {graph_err}"
             )
+
+        # <<< 로드맵에 따른 초기 상태 로드 (선택적 기능) 시작 >>>
+        # API 레벨에서 초기 상태를 제공할 수도 있고, 여기서 task_id 기반으로 로드할 수도 있습니다.
+        # 여기서는 task_id와 특정 키를 사용하여 이전 상태를 로드 시도한다고 가정합니다.
+        # 실제 키 전략은 애플리케이션에 따라 다릅니다.
+        initial_state_from_memory: Optional[Dict[str, Any]] = None
+        # 예시: API에서 전달된 initial_metadata에 'resume_from_checkpoint_key' 같은 플래그/키가 있다면 로드
+        resume_key = (initial_metadata or {}).get("resume_from_checkpoint_key")
+        if resume_key:
+            logger.info(f"Attempting to resume workflow for task_id '{task_id}' from memory key '{resume_key}'.")
+            loaded_data = await self.memory_manager.load_state(context_id=task_id, key=resume_key)
+            if loaded_data and isinstance(loaded_data, dict):
+                initial_state_from_memory = loaded_data
+                logger.info(f"Resuming workflow for task_id '{task_id}' with state loaded from memory.")
+            else:
+                logger.warning(f"No valid state found in memory for task_id '{task_id}' with key '{resume_key}'. Starting fresh.")
+        # <<< 초기 상태 로드 끝 >>>
+
+        initial_state_dict = {}
+        if initial_state_from_memory:
+            initial_state_dict = initial_state_from_memory
+            # 필요시 original_input, metadata 등 업데이트
+            initial_state_dict["task_id"] = task_id # task_id는 현재 실행 기준으로 덮어쓰기
+            initial_state_dict["original_input"] = original_input # 입력은 새것으로
+            initial_state_dict["metadata"] = {**(initial_state_dict.get("metadata", {})), **(initial_metadata or {})}
+        else:
+            initial_agent_state_obj = AgentGraphState(
+                task_id=task_id,
+                original_input=original_input,
+                metadata=initial_metadata or {},
+                max_search_depth=(initial_metadata or {}).get('max_search_depth', 5)
+            )
+            try:
+                encoder = msgspec.msgpack.Encoder()
+                decoder = msgspec.msgpack.Decoder(Dict[str, Any])
+                initial_state_dict = decoder.decode(encoder.encode(initial_agent_state_obj))
+            except Exception as dump_err:
+                logger.error(f"Failed to convert initial state object to dict for workflow '{graph_config_name}': {dump_err}")
+                return AgentGraphState(
+                     task_id=task_id,
+                     original_input=original_input,
+                     metadata=initial_metadata or {},
+                     error_message=f"Failed to prepare initial state: {dump_err}"
+                )
+
+        logger.debug(f"Initial state dict for workflow '{graph_config_name}': {initial_state_dict}")
 
         final_state_dict = None
         try:
             config = {"recursion_limit": max_iterations}
+            # LangGraph는 입력으로 상태 객체 전체가 아닌 dict를 받습니다.
             final_state_dict = await compiled_graph.ainvoke(initial_state_dict, config=config)
 
         except Exception as invoke_err:
             logger.error(f"Error invoking graph '{graph_config_name}' for task {task_id}: {invoke_err}", exc_info=True)
-            # 실패 시 초기 상태 기반으로 반환
-            return AgentGraphState(
-                task_id=task_id,
-                original_input=original_input,
-                metadata=initial_metadata or {},
-                error_message=f"Workflow execution failed: {str(invoke_err)}"
-            )
+            # 실패 시 현재 상태(initial_state_dict에서 변환)를 기반으로 에러 메시지 포함하여 반환
+            try:
+                error_state = msgspec.convert(initial_state_dict, AgentGraphState, strict=False)
+                error_state.error_message = f"Workflow execution failed: {str(invoke_err)}"
+                return error_state
+            except Exception as convert_err_on_error:
+                 logger.error(f"Failed to convert initial_state_dict to AgentGraphState during error handling: {convert_err_on_error}")
+                 # 최후의 수단
+                 return AgentGraphState(task_id=task_id, original_input=original_input, metadata=initial_metadata or {}, error_message=f"Workflow execution failed: {str(invoke_err)} AND state conversion error.")
+
 
         if final_state_dict and isinstance(final_state_dict, dict):
             try:
-                # *** 수정: msgspec.convert 사용 ***
-                final_state = msgspec.convert(final_state_dict, AgentGraphState, strict=False) # strict=False로 유연성 확보
+                final_state = msgspec.convert(final_state_dict, AgentGraphState, strict=False)
                 logger.info(f"Workflow '{graph_config_name}' for task {task_id} completed. Final Answer: {final_state.final_answer or 'N/A'}")
                 if final_state.error_message:
                      logger.warning(f"Workflow '{graph_config_name}' completed with error: {final_state.error_message}")
-                return final_state
+                return final_state # 최종 상태 반환 (저장은 API 레벨에서)
             except Exception as convert_err:
                 logger.error(f"Error converting final state dictionary to AgentGraphState for task {task_id}: {convert_err}", exc_info=True)
-                # 변환 실패 시, 초기 상태 기반에 final_answer와 에러 메시지만 추가
+                # 변환 실패 시, dict에서 직접 필요한 정보 추출 시도하여 AgentGraphState 구성
+                return AgentGraphState(
+                    task_id=task_id,
+                    original_input=original_input, # 또는 final_state_dict.get('original_input', original_input)
+                    metadata=final_state_dict.get("metadata", initial_metadata or {}),
+                    current_iteration=final_state_dict.get("current_iteration", 0),
+                    final_answer=final_state_dict.get("final_answer", "Workflow completed but final state conversion failed."),
+                    error_message=f"Final state conversion error: {convert_err}. Raw error: {final_state_dict.get('error_message')}",
+                    # ... AgentGraphState의 다른 필드들도 final_state_dict에서 가져오도록 시도 ...
+                    dynamic_data=final_state_dict.get("dynamic_data", {})
+                )
+        else:
+            logger.error(f"Workflow '{graph_config_name}' for task {task_id} invocation returned unexpected type: {type(final_state_dict).__name__} or None.")
+            # 이 경우에도 initial_state_dict를 기반으로 오류 상태 반환 시도
+            try:
+                error_state = msgspec.convert(initial_state_dict, AgentGraphState, strict=False)
+                error_state.error_message="Workflow execution finished but returned invalid final state."
+                return error_state
+            except Exception as convert_err_on_empty:
+                logger.error(f"Failed to convert initial_state_dict during empty final state handling: {convert_err_on_empty}")
                 return AgentGraphState(
                     task_id=task_id,
                     original_input=original_input,
                     metadata=initial_metadata or {},
-                    final_answer=final_state_dict.get("final_answer", "Workflow completed but final state conversion failed."), # dict에서 직접 추출 시도
-                    error_message=f"Final state conversion error: {convert_err}"
+                    error_message="Workflow execution finished but returned invalid final state AND state conversion error."
                 )
-        else:
-            logger.error(f"Workflow '{graph_config_name}' for task {task_id} invocation returned unexpected type: {type(final_state_dict).__name__} or None.")
-            return AgentGraphState(
-                 task_id=task_id,
-                 original_input=original_input,
-                 metadata=initial_metadata or {},
-                 error_message="Workflow execution finished but returned invalid final state."
-            )
+
 
 
 

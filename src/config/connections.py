@@ -1,379 +1,104 @@
-"""
-Connection management for external services including Redis and HTTP.
-Provides connection pooling and proper resource management.
-"""
-import asyncio
-import contextlib
-import threading
-import os
-from typing import AsyncGenerator, Generator, Optional, Any
-
-import aiohttp
-import redis
+# src/config/connections.py
 import redis.asyncio as aioredis
+from redis.asyncio.connection import ConnectionPool
+from typing import Optional
 
-from src.config.errors import ConnectionError, ErrorCode
-from src.config.logger import get_logger
-# metrics.py 변경 사항 반영: get_metrics_manager와 MEMORY_METRICS 임포트
-from src.config.metrics import MEMORY_METRICS, get_metrics_manager
 from src.config.settings import get_settings
+from src.config.logger import get_logger
+from src.config.errors import ConnectionError, ErrorCode # ConnectionError 임포트 추가
 
 logger = get_logger(__name__)
+settings = get_settings()
 
-class DummyRedisClient:
-    """테스트·로컬용 인메모리 스텁."""
-    def __init__(self):
-        self._store: dict[str, bytes] = {}
+# 전역 변수로 연결 풀 관리 (싱글톤)
+_redis_pool: Optional[ConnectionPool] = None
 
-    async def get(self, key: str) -> Optional[bytes]:
-        return self._store.get(key)
-
-    async def set(self, key: str, value: bytes) -> bool:
-        self._store[key] = value
-        return True
-
-    async def setex(self, key: str, ttl: int, value: bytes) -> bool:
-        self._store[key] = value
-        return True
-
-    async def delete(self, *keys: str) -> int:
-        deleted = 0
-        for k in keys:
-            if k in self._store:
-                del self._store[k]
-                deleted += 1
-        return deleted
-
-    async def scan(self, cursor=0, match: str = "*"):
-        matched = [k.encode() for k in self._store if k.startswith(match.rstrip("*"))]
-        return 0, matched
-
-    async def mget(self, *keys: str):
-        return [self._store.get(k) for k in keys]
-
-    def pipeline(self, *_, **__):
-        class _Pipe:
-            async def __aenter__(self): return self
-            async def __aexit__(self, *exc): pass
-            async def setex(self, key, ttl, value): return True
-            async def execute(self): return True
-        return _Pipe()
-
-class ConnectionManager:
+async def setup_connection_pools():
     """
-    Manages connection pools for various services.
-    Implements the singleton pattern for global access with proper resource management.
+    애플리케이션 시작 시 Redis 연결 풀을 설정합니다.
+    이 함수는 FastAPI의 lifespan 등 애플리케이션 시작 지점에서 호출되어야 합니다.
     """
-    _instance = None
-    _lock = threading.Lock()
-
-    def __new__(cls):
-        with cls._lock:
-            if cls._instance is None:
-                cls._instance = super(ConnectionManager, cls).__new__(cls)
-                cls._instance._initialized = False
-            return cls._instance
-
-    def __init__(self):
-        if self._initialized:
-            return
-
-        self.settings = get_settings()
-        # metrics.py 변경 사항 반영: MetricsManager 인스턴스 가져오기
-        self.metrics_manager = get_metrics_manager()
-
-        # Initialize connection pools as None
-        self._redis_sync_pool = None
-        self._redis_sync_pool_lock = threading.Lock()
-
-        self._redis_async_pool = None
-        self._redis_async_pool_lock = asyncio.Lock()
-
-        self._http_session_pool = None
-        self._http_session_pool_lock = asyncio.Lock()
-
-        self._initialized = True
-        logger.debug("ConnectionManager initialized")
-
-    # metrics.py 변경 사항 반영: 데코레이터 호출 방식 및 메트릭 이름 변경
-    @get_metrics_manager().timed_metric(MEMORY_METRICS['duration'], {'operation_type': 'connect_redis'})
-    def get_redis_connection(self) -> redis.Redis:
-        """Get a Redis connection from the pool."""
-        with self._redis_sync_pool_lock:
-            if self._redis_sync_pool is None:
-                logger.debug('Creating new Redis sync connection pool')
-                pool_kwargs = {
-                    'max_connections': self.settings.REDIS_CONNECTION_POOL_SIZE,
-                    'decode_responses': True
-                }
-                if self.settings.REDIS_PASSWORD:
-                    pool_kwargs['password'] = self.settings.REDIS_PASSWORD
-
-                try:
-                    self._redis_sync_pool = redis.ConnectionPool.from_url(
-                        self.settings.REDIS_URL, **pool_kwargs
-                    )
-                    logger.info(
-                        f'Redis sync connection pool initialized with '
-                        f'max_connections={self.settings.REDIS_CONNECTION_POOL_SIZE}'
-                    )
-                except Exception as e:
-                    error_msg = f"Failed to initialize Redis connection pool: {str(e)}"
-                    logger.error(error_msg, exc_info=True)
-                    raise ConnectionError(
-                        code=ErrorCode.REDIS_CONNECTION_ERROR,
-                        message=error_msg,
-                        original_error=e,
-                        service="redis"
-                    ) #
-
-        return redis.Redis(connection_pool=self._redis_sync_pool)
-
-    @contextlib.contextmanager
-    def redis_connection(self) -> Generator[redis.Redis, None, None]:
-        """Context manager for Redis connections."""
-        conn = None
-        try:
-            conn = self.get_redis_connection()
-            yield conn
-        except Exception as e:
-            error_msg = f"Error with Redis connection: {str(e)}"
-            logger.error(error_msg, exc_info=True) #
-            raise ConnectionError(
-                code=ErrorCode.REDIS_OPERATION_ERROR,
-                message=error_msg,
-                original_error=e,
-                service="redis"
-            ) #
-        finally:
-            # Connection goes back to pool automatically
-            pass
-
-    # metrics.py 변경 사항 반영: 데코레이터 호출 방식 및 메트릭 이름 변경
-    @get_metrics_manager().timed_metric(
-        MEMORY_METRICS['duration'],
-        {'operation_type': 'connect_redis_async'}
-    )
-    async def get_redis_async_connection(self) -> aioredis.Redis:
-        """Get an async Redis connection from the pool."""
-        async with self._redis_async_pool_lock:
-            if self._redis_async_pool is None:
-                logger.debug('Creating new Redis async connection pool')
-                pool_kwargs = {
-                    'max_connections': self.settings.REDIS_CONNECTION_POOL_SIZE,
-                    # 바이너리(raw bytes) 데이터를 그대로 다루기 위해 False로 설정
-                    'decode_responses': False
-                }
-                if self.settings.REDIS_PASSWORD:
-                    pool_kwargs['password'] = self.settings.REDIS_PASSWORD
-
-                try:
-                    self._redis_async_pool = aioredis.ConnectionPool.from_url(
-                        self.settings.REDIS_URL,
-                        **pool_kwargs
-                    )
-                    logger.info(
-                        f'Redis async connection pool initialized with '
-                        f'max_connections={self.settings.REDIS_CONNECTION_POOL_SIZE}'
-                    )
-                except Exception as e:
-                    error_msg = f"Failed to initialize Redis async connection pool: {str(e)}"
-                    logger.error(error_msg, exc_info=True)
-                    raise ConnectionError(
-                        code=ErrorCode.REDIS_CONNECTION_ERROR,
-                        message=error_msg,
-                        original_error=e,
-                        service="redis-async"
-                    )
-
-        return aioredis.Redis(connection_pool=self._redis_async_pool)
-
-    @contextlib.asynccontextmanager
-    async def redis_async_connection(self) -> AsyncGenerator[aioredis.Redis, None]:
-        """Async context manager for Redis connections."""
-        conn = None
-        try:
-            conn = await self.get_redis_async_connection()
-            yield conn
-        except Exception as e:
-            error_msg = f"Error with async Redis connection: {str(e)}"
-            logger.error(error_msg, exc_info=True) #
-            raise ConnectionError(
-                code=ErrorCode.REDIS_OPERATION_ERROR,
-                message=error_msg,
-                original_error=e,
-                service="redis-async"
-            ) #
-        finally:
-            # Connection goes back to pool automatically
-            pass
-
-    async def get_http_session(self) -> aiohttp.ClientSession:
-        """Get an HTTP session from the pool."""
-        async with self._http_session_pool_lock:
-            if self._http_session_pool is None:
-                logger.debug('Creating new aiohttp ClientSession pool') #
-
-                connector = aiohttp.TCPConnector(
-                    limit=100,
-                    ttl_dns_cache=300,
-                    enable_cleanup_closed=True,
-                    force_close=True,
-                    limit_per_host=10
-                )
-
-                request_timeout = 30.0
-                if self.settings and hasattr(self.settings, 'REQUEST_TIMEOUT'):
-                    request_timeout = self.settings.REQUEST_TIMEOUT #
-
-                timeout = aiohttp.ClientTimeout(
-                    total=request_timeout,
-                    connect=10.0,
-                    sock_connect=10.0,
-                    sock_read=request_timeout
-                )
-
-                try:
-                    self._http_session_pool = aiohttp.ClientSession(
-                        connector=connector,
-                        timeout=timeout,
-                        raise_for_status=True
-                    )
-                    logger.info(f'aiohttp ClientSession initialized with total_timeout={request_timeout}s') #
-                except Exception as e:
-                    error_msg = f"Failed to initialize HTTP session: {str(e)}"
-                    logger.error(error_msg, exc_info=True) #
-                    raise ConnectionError(
-                        code=ErrorCode.HTTP_ERROR,
-                        message=error_msg,
-                        original_error=e,
-                        service="http"
-                    ) #
-
-        return self._http_session_pool
-
-    @contextlib.asynccontextmanager
-    async def http_session(self) -> AsyncGenerator[aiohttp.ClientSession, None]:
-        """Async context manager for HTTP sessions."""
-        try:
-            session = await self.get_http_session()
-            yield session
-        except Exception as e:
-            error_msg = f"Error with HTTP session: {str(e)}"
-            logger.error(error_msg, exc_info=True) #
-            raise ConnectionError(
-                code=ErrorCode.HTTP_ERROR,
-                message=error_msg,
-                original_error=e,
-                service="http"
-            ) #
-
-    def close_sync_connections(self) -> None:
-        """Close all synchronous connections."""
-        if self._redis_sync_pool is not None:
-            try:
-                logger.info('Closing Redis sync connection pool...') #
-                self._redis_sync_pool.disconnect()
-                self._redis_sync_pool = None
-                logger.debug('Redis sync pool disconnected') #
-            except Exception as e:
-                logger.error(f'Error closing Redis sync connection pool: {e}', exc_info=True) #
-
-    async def close_async_connections(self) -> None:
-        """Close all asynchronous connections."""
-        tasks = []
-
-        # Close Redis async pool
-        if self._redis_async_pool is not None:
-            async def close_redis_async():
-                try:
-                    logger.info('Closing Redis async connection pool...') #
-                    await self._redis_async_pool.disconnect()
-                    logger.debug('Redis async pool disconnected') #
-                except Exception as e:
-                    logger.error(f'Error disconnecting Redis async pool: {e}', exc_info=True) #
-                finally:
-                    self._redis_async_pool = None
-
-            tasks.append(close_redis_async())
-
-        # Close HTTP session pool
-        if self._http_session_pool is not None:
-            async def close_http_session():
-                try:
-                    logger.info('Closing HTTP session pool...') #
-                    await self._http_session_pool.close()
-                    logger.debug('aiohttp ClientSession closed') #
-                except Exception as e:
-                    logger.error(f'Error closing aiohttp ClientSession: {e}', exc_info=True) #
-                finally:
-                    self._http_session_pool = None
-
-            tasks.append(close_http_session())
-
-        # Wait for all close operations to complete
-        if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
-            logger.info('All async connection pools closed') #
-
-    async def close_all_connections(self) -> None:
-        """Close all connections, both sync and async."""
-        self.close_sync_connections()
-        await self.close_async_connections()
-        logger.info('All connection pools closed') #
-
-
-# Convenience functions for global access
-def get_connection_manager() -> ConnectionManager:
-    """Get the singleton connection manager instance."""
-    return ConnectionManager()
-
-
-def setup_connection_pools() -> None:
-    """Initialize connection pools."""
-    manager = get_connection_manager()
-    try:
-        # Pre-initialize Redis connection pool
-        with manager.redis_connection() as _:
-            logger.info('Initialized Redis sync connection pool') #
-    except Exception as e:
-        logger.error(f'Failed to initialize Redis sync connection pool during setup: {e}', exc_info=True) #
-
-    logger.info('Async Redis and HTTP connection pools will be initialized on first use') #
-
-
-async def cleanup_connection_pools() -> None:
-    """Clean up all connection pools."""
-    logger.info('Cleaning up connection pools...') #
-    manager = get_connection_manager()
-    await manager.close_all_connections()
-    logger.info('Connection pool cleanup complete') #
-    
-@contextlib.asynccontextmanager
-async def redis_async_connection(**kwargs) -> AsyncGenerator[Any, None]:
-    """
-    Async Redis 연결 컨텍스트.
-    - REDIS_URL 미설정 시 → DummyRedisClient
-    - REDIS_URL 설정 시 → ConnectionManager의 실제 async Redis 풀
-    """
-    settings = get_settings()
-    redis_url = getattr(settings, "REDIS_URL", None)
-
-    # REDIS_URL이 없으면 테스트용 Dummy, 있으면 실제 풀
-    if not redis_url:
-        yield DummyRedisClient()
+    global _redis_pool
+    if _redis_pool is not None:
+        logger.warning("Redis connection pool already initialized.")
         return
 
-    # 실제 풀을 반환
-    conn = await ConnectionManager().get_redis_async_connection(**kwargs)
     try:
-        yield conn
-    finally:
-        # 풀 복귀는 ConnectionManager에서 관리
-        pass
+        logger.info(f"Setting up Redis connection pool for URL: {settings.REDIS_URL} (DB: {settings.REDIS_DB})")
+        # 설정에서 host, port, db, password를 직접 사용할 수도 있습니다.
+        # 예: _redis_pool = ConnectionPool(host=settings.REDIS_HOST, port=settings.REDIS_PORT, ...)
+        _redis_pool = ConnectionPool.from_url(
+            settings.REDIS_URL,
+            # password=settings.REDIS_PASSWORD, # 필요시 주석 해제
+            # db=settings.REDIS_DB, # URL에 DB 정보가 없다면 명시적 지정
+            max_connections=settings.REDIS_CONNECTION_POOL_SIZE,
+            decode_responses=False, # 직렬화/역직렬화를 직접 하므로 bytes로 받음
+            health_check_interval=30 # 연결 상태 주기적 확인 (초)
+        )
+        # 간단한 연결 테스트
+        conn = aioredis.Redis(connection_pool=_redis_pool)
+        await conn.ping()
+        # 테스트 후에는 연결을 명시적으로 닫을 필요 없음 (풀에서 관리)
+        # await conn.close() # 불필요
+        logger.info("Redis connection pool initialized and ping successful.")
+    except Exception as e:
+        logger.error(f"Failed to initialize Redis connection pool: {e}", exc_info=True)
+        _redis_pool = None # 실패 시 None으로 유지
+        # 앱 시작 실패를 유도하기 위해 에러를 다시 발생시킬 수 있음
+        raise ConnectionError(
+            code=ErrorCode.REDIS_CONNECTION_ERROR,
+            message=f"Failed to connect to Redis at {settings.REDIS_URL}: {e}",
+            original_error=e,
+            service="redis"
+        ) from e
 
-# __all__에 포함
-try:
-    __all__.append("redis_async_connection")
-except NameError:
-    __all__ = ["redis_async_connection"]
+async def cleanup_connection_pools():
+    """
+    애플리케이션 종료 시 Redis 연결 풀을 정리합니다.
+    이 함수는 FastAPI의 lifespan 등 애플리케이션 종료 지점에서 호출되어야 합니다.
+    """
+    global _redis_pool
+    if _redis_pool:
+        logger.info("Closing Redis connection pool...")
+        try:
+            # dispose()를 사용하여 모든 유휴 연결을 닫음
+            await _redis_pool.disconnect()
+            _redis_pool = None
+            logger.info("Redis connection pool closed.")
+        except Exception as e:
+            logger.error(f"Error closing Redis connection pool: {e}", exc_info=True)
+    else:
+        logger.info("Redis connection pool was not initialized or already closed.")
+
+async def get_redis_async_connection() -> aioredis.Redis:
+    """
+    연결 풀에서 비동기 Redis 클라이언트 인스턴스를 가져옵니다.
+    풀이 초기화되지 않았으면 RuntimeError를 발생시킵니다.
+
+    Returns:
+        aioredis.Redis: 비동기 Redis 클라이언트 인스턴스.
+
+    Raises:
+        RuntimeError: 연결 풀이 초기화되지 않은 경우.
+        ConnectionError: 연결 풀에서 클라이언트 생성 중 오류 발생 시.
+    """
+    global _redis_pool
+    if _redis_pool is None:
+        logger.critical("Attempted to get Redis connection before the pool was initialized.")
+        raise RuntimeError(
+            "Redis connection pool is not available. "
+            "Ensure setup_connection_pools() is called during application startup."
+        )
+    try:
+        # Redis 클라이언트 인스턴스를 생성하여 반환 (내부적으로 풀 사용)
+        # logger.debug("Providing Redis connection instance from pool.") # 너무 빈번할 수 있어 주석 처리
+        return aioredis.Redis(connection_pool=_redis_pool)
+    except Exception as e:
+        # 클라이언트 인스턴스 생성 실패 시
+        logger.error(f"Failed to create Redis client instance from pool: {e}", exc_info=True)
+        raise ConnectionError(
+            code=ErrorCode.REDIS_CONNECTION_ERROR,
+            message=f"Failed to get Redis connection from pool: {e}",
+            original_error=e,
+            service="redis"
+        ) from e
