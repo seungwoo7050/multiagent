@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field, ValidationError, create_model
 from langchain_core.tools import BaseTool as LangchainBaseTool # 이름 충돌 방지
 
 from src.config.errors import ErrorCode, ToolError
-from src.config.logger import get_logger
+from src.utils.logger import get_logger
 # from src.config.metrics import TOOL_METRICS, timed_metric # BaseTool에서 제거, 필요시 개별 도구에 적용
 
 logger = get_logger(__name__)

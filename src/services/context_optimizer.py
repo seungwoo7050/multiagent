@@ -3,7 +3,7 @@
 컨텍스트 데이터를 최적화(예: 압축, 정제)하는 로직을 포함합니다.
 """
 from typing import Any, Dict
-from src.config.logger import get_logger
+from src.utils.logger import get_logger
 # 필요시 schemas/mcp_models 등에서 정의한 모델 임포트
 # from src.schemas.mcp_models import LLMInputContext, LLMOutputContext
 

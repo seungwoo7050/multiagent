@@ -29,7 +29,7 @@ def initialize_config() -> bool:
         from src.config.settings import get_settings
         settings = get_settings()
         
-        from src.config.logger import get_logger, setup_logging
+        from src.utils.logger import get_logger, setup_logging
         setup_logging()
         logger = get_logger(__name__)
         

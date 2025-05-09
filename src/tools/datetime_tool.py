@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field, field_validator
 from src.tools.base import BaseTool
 
 from src.config.errors import ErrorCode, ToolError
-from src.config.logger import get_logger
+from src.utils.logger import get_logger
 from src.services.tool_manager import register_tool
 
 logger = get_logger(__name__)

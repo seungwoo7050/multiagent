@@ -8,7 +8,7 @@ import base64
 from enum import Enum
 from typing import Any, Dict, Optional, Type, TypeVar
 import msgspec
-from src.config.logger import get_logger
+from src.utils.logger import get_logger
 from src.config.errors import SystemError, ErrorCode
 
 logger = get_logger(__name__)

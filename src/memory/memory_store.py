@@ -4,7 +4,7 @@ from typing import Any, Dict, List, Optional, Callable, Awaitable
 
 # 필요한 설정 및 유틸리티 임포트
 from src.config.settings import get_settings
-from src.config.logger import get_logger
+from src.utils.logger import get_logger
 from src.config.errors import ErrorCode, MemoryError, convert_exception
 # Redis 연결 관리 모듈 임포트
 from src.config.connections import get_redis_async_connection

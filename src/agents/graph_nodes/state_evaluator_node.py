@@ -5,12 +5,14 @@ from typing import Any, Dict, List, Optional, TypedDict
 
 from langchain_core.runnables import RunnableConfig
 
-from src.config.logger import get_logger
+from src.utils.logger import get_logger
 from src.config.settings import get_settings # settings 임포트 추가
 from src.services.llm_client import LLMClient
 from src.schemas.mcp_models import AgentGraphState, Thought
 from src.services.notification_service import NotificationService # 추가
 from src.schemas.websocket_models import StatusUpdateMessage, IntermediateResultMessage # 추가
+from opentelemetry import trace
+tracer = trace.get_tracer(__name__)
 
 logger = get_logger(__name__)
 settings = get_settings() # settings 인스턴스
@@ -116,127 +118,136 @@ class StateEvaluatorNode:
         """
 
     async def __call__(self, state: AgentGraphState, config: Optional[RunnableConfig] = None) -> Dict[str, Any]:
-        logger.info(f"StateEvaluatorNode '{self.node_id}' execution started. Task ID: {state.task_id}")
-        await self.notification_service.broadcast_to_task(
-            state.task_id,
-            StatusUpdateMessage(task_id=state.task_id, status="node_executing", detail=f"Node '{self.node_id}' (State Evaluator) started.", current_node=self.node_id)
-        )
+        with tracer.start_as_current_span(
+            "graph.node.state_evaluator",
+            attributes={
+                "node_id": self.node_id,
+                "task_id": state.task_id,
+                "thoughts_to_eval": len(state.current_thoughts_to_evaluate),
+            },
+        ):
 
-        updated_thoughts_map = {t.id: t for t in state.thoughts}
-        error_message: Optional[str] = None
-        any_evaluation_done = False
-        evaluations_summary_for_log = [] # 로그용 요약
-
-        if not state.current_thoughts_to_evaluate:
-            logger.info(f"Node '{self.node_id}' (Task: {state.task_id}): No thoughts to evaluate.")
+            logger.info(f"StateEvaluatorNode '{self.node_id}' execution started. Task ID: {state.task_id}")
             await self.notification_service.broadcast_to_task(
                 state.task_id,
-                StatusUpdateMessage(task_id=state.task_id, status="node_completed", detail=f"Node '{self.node_id}' finished: No thoughts to evaluate.", current_node=self.node_id, next_node="search_strategy" if state.thoughts else None) # 다음 노드 정보 추가
+                StatusUpdateMessage(task_id=state.task_id, status="node_executing", detail=f"Node '{self.node_id}' (State Evaluator) started.", current_node=self.node_id)
             )
-            return {"current_thoughts_to_evaluate": []}
 
-        for thought_id_to_eval in state.current_thoughts_to_evaluate:
-            thought_to_eval = updated_thoughts_map.get(thought_id_to_eval)
+            updated_thoughts_map = {t.id: t for t in state.thoughts}
+            error_message: Optional[str] = None
+            any_evaluation_done = False
+            evaluations_summary_for_log = [] # 로그용 요약
 
-            if not thought_to_eval:
-                logger.warning(f"Node '{self.node_id}' (Task: {state.task_id}): Thought with ID '{thought_id_to_eval}' not found. Skipping.")
-                continue
-
-            parent_thought_content = "N/A (Initial thought or parent not found)"
-            if thought_to_eval.parent_id:
-                parent = state.get_thought_by_id(thought_to_eval.parent_id)
-                if parent:
-                    parent_thought_content = parent.content
-
-            try:
-                eval_prompt = self._construct_evaluation_prompt(state, thought_to_eval.content, parent_thought_content)
-                logger.debug(f"Node '{self.node_id}' (Task: {state.task_id}): Evaluation prompt for thought '{thought_to_eval.id}'.")
-
-                messages = [{"role": "user", "content": eval_prompt}]
-                eval_response_str = await self.llm_client.generate_response(
-                    messages=messages, model_name=self.model_name,
-                    temperature=self.temperature, max_tokens=self.max_tokens_per_eval
-                )
-                logger.debug(f"Node '{self.node_id}' (Task: {state.task_id}): Evaluation response for '{thought_to_eval.id}': {eval_response_str[:100]}...")
-
-                score = 0.0
-                reasoning = "Could not parse evaluation."
-                score_match = re.search(r"Score:\s*([0-9.]+)", eval_response_str, re.IGNORECASE)
-                reasoning_match = re.search(r"Reasoning:\s*([\s\S]+)", eval_response_str, re.IGNORECASE | re.DOTALL) # DOTALL 추가
-
-                if score_match:
-                    try: score = float(score_match.group(1))
-                    except ValueError: logger.warning(f"Node '{self.node_id}': Could not parse score from: '{score_match.group(1)}'")
-                else: logger.warning(f"Node '{self.node_id}': 'Score:' pattern not found.")
-
-                if reasoning_match: reasoning = reasoning_match.group(1).strip()
-                else: logger.warning(f"Node '{self.node_id}': 'Reasoning:' pattern not found.")
-                
-                # CasePreservingStr 사용 여부 결정 (여기선 일단 str)
-                # reasoning = CasePreservingStr(reasoning)
-
-                updated_metadata = thought_to_eval.metadata.copy() if thought_to_eval.metadata else {}
-                updated_metadata['eval_reasoning'] = reasoning
-                updated_metadata['raw_eval_response'] = eval_response_str
-
-                new_thought_version = Thought(
-                    id=thought_to_eval.id, parent_id=thought_to_eval.parent_id, content=thought_to_eval.content,
-                    evaluation_score=score, status="evaluated", metadata=updated_metadata
-                )
-                updated_thoughts_map[thought_id_to_eval] = new_thought_version
-                any_evaluation_done = True
-                evaluations_summary_for_log.append(f"Thought '{thought_to_eval.id}': Score={score:.2f}")
-
-                # 각 생각 평가 완료 시 중간 결과 알림
+            if not state.current_thoughts_to_evaluate:
+                logger.info(f"Node '{self.node_id}' (Task: {state.task_id}): No thoughts to evaluate.")
                 await self.notification_service.broadcast_to_task(
                     state.task_id,
-                    IntermediateResultMessage(
-                        task_id=state.task_id, node_id=self.node_id,
-                        result_step_name="thought_evaluated",
-                        data={"thought_id": thought_id_to_eval, "score": score, "reasoning": reasoning[:150]+"..."} # 긴 내용은 자르기
+                    StatusUpdateMessage(task_id=state.task_id, status="node_completed", detail=f"Node '{self.node_id}' finished: No thoughts to evaluate.", current_node=self.node_id, next_node="search_strategy" if state.thoughts else None) # 다음 노드 정보 추가
+                )
+                return {"current_thoughts_to_evaluate": []}
+
+            for thought_id_to_eval in state.current_thoughts_to_evaluate:
+                thought_to_eval = updated_thoughts_map.get(thought_id_to_eval)
+
+                if not thought_to_eval:
+                    logger.warning(f"Node '{self.node_id}' (Task: {state.task_id}): Thought with ID '{thought_id_to_eval}' not found. Skipping.")
+                    continue
+
+                parent_thought_content = "N/A (Initial thought or parent not found)"
+                if thought_to_eval.parent_id:
+                    parent = state.get_thought_by_id(thought_to_eval.parent_id)
+                    if parent:
+                        parent_thought_content = parent.content
+
+                try:
+                    eval_prompt = self._construct_evaluation_prompt(state, thought_to_eval.content, parent_thought_content)
+                    logger.debug(f"Node '{self.node_id}' (Task: {state.task_id}): Evaluation prompt for thought '{thought_to_eval.id}'.")
+
+                    messages = [{"role": "user", "content": eval_prompt}]
+                    eval_response_str = await self.llm_client.generate_response(
+                        messages=messages, model_name=self.model_name,
+                        temperature=self.temperature, max_tokens=self.max_tokens_per_eval
                     )
-                )
+                    logger.debug(f"Node '{self.node_id}' (Task: {state.task_id}): Evaluation response for '{thought_to_eval.id}': {eval_response_str[:100]}...")
 
-            except Exception as e:
-                logger.error(f"Node '{self.node_id}' (Task: {state.task_id}): Error evaluating thought '{thought_id_to_eval}': {e}", exc_info=True)
-                # 실패 처리 및 알림
-                failed_metadata = thought_to_eval.metadata.copy() if thought_to_eval.metadata else {}
-                failed_metadata['eval_error'] = str(e)
-                failed_thought_version = Thought(
-                    id=thought_to_eval.id, parent_id=thought_to_eval.parent_id, content=thought_to_eval.content,
-                    evaluation_score=None, status="evaluation_failed", metadata=failed_metadata
-                )
-                updated_thoughts_map[thought_id_to_eval] = failed_thought_version
-                any_evaluation_done = True
-                error_message = (error_message or "") + f"Error evaluating {thought_id_to_eval}: {str(e)}; "
-                await self.notification_service.broadcast_to_task(
-                    state.task_id,
-                    IntermediateResultMessage(
-                        task_id=state.task_id, node_id=self.node_id,
-                        result_step_name="thought_evaluation_failed",
-                        data={"thought_id": thought_id_to_eval, "error": str(e)}
+                    score = 0.0
+                    reasoning = "Could not parse evaluation."
+                    score_match = re.search(r"Score:\s*([0-9.]+)", eval_response_str, re.IGNORECASE)
+                    reasoning_match = re.search(r"Reasoning:\s*([\s\S]+)", eval_response_str, re.IGNORECASE | re.DOTALL) # DOTALL 추가
+
+                    if score_match:
+                        try: score = float(score_match.group(1))
+                        except ValueError: logger.warning(f"Node '{self.node_id}': Could not parse score from: '{score_match.group(1)}'")
+                    else: logger.warning(f"Node '{self.node_id}': 'Score:' pattern not found.")
+
+                    if reasoning_match: reasoning = reasoning_match.group(1).strip()
+                    else: logger.warning(f"Node '{self.node_id}': 'Reasoning:' pattern not found.")
+                    
+                    # CasePreservingStr 사용 여부 결정 (여기선 일단 str)
+                    # reasoning = CasePreservingStr(reasoning)
+
+                    updated_metadata = thought_to_eval.metadata.copy() if thought_to_eval.metadata else {}
+                    updated_metadata['eval_reasoning'] = reasoning
+                    updated_metadata['raw_eval_response'] = eval_response_str
+
+                    new_thought_version = Thought(
+                        id=thought_to_eval.id, parent_id=thought_to_eval.parent_id, content=thought_to_eval.content,
+                        evaluation_score=score, status="evaluated", metadata=updated_metadata
                     )
+                    updated_thoughts_map[thought_id_to_eval] = new_thought_version
+                    any_evaluation_done = True
+                    evaluations_summary_for_log.append(f"Thought '{thought_to_eval.id}': Score={score:.2f}")
+
+                    # 각 생각 평가 완료 시 중간 결과 알림
+                    await self.notification_service.broadcast_to_task(
+                        state.task_id,
+                        IntermediateResultMessage(
+                            task_id=state.task_id, node_id=self.node_id,
+                            result_step_name="thought_evaluated",
+                            data={"thought_id": thought_id_to_eval, "score": score, "reasoning": reasoning[:150]+"..."} # 긴 내용은 자르기
+                        )
+                    )
+
+                except Exception as e:
+                    logger.error(f"Node '{self.node_id}' (Task: {state.task_id}): Error evaluating thought '{thought_id_to_eval}': {e}", exc_info=True)
+                    # 실패 처리 및 알림
+                    failed_metadata = thought_to_eval.metadata.copy() if thought_to_eval.metadata else {}
+                    failed_metadata['eval_error'] = str(e)
+                    failed_thought_version = Thought(
+                        id=thought_to_eval.id, parent_id=thought_to_eval.parent_id, content=thought_to_eval.content,
+                        evaluation_score=None, status="evaluation_failed", metadata=failed_metadata
+                    )
+                    updated_thoughts_map[thought_id_to_eval] = failed_thought_version
+                    any_evaluation_done = True
+                    error_message = (error_message or "") + f"Error evaluating {thought_id_to_eval}: {str(e)}; "
+                    await self.notification_service.broadcast_to_task(
+                        state.task_id,
+                        IntermediateResultMessage(
+                            task_id=state.task_id, node_id=self.node_id,
+                            result_step_name="thought_evaluation_failed",
+                            data={"thought_id": thought_id_to_eval, "error": str(e)}
+                        )
+                    )
+
+            final_thoughts_list = list(updated_thoughts_map.values())
+            log_summary_str = ', '.join(evaluations_summary_for_log) if evaluations_summary_for_log else 'No new evaluations.'
+            logger.info(f"Node '{self.node_id}' (Task: {state.task_id}): Evaluations completed. Summary: {log_summary_str}")
+
+            update_payload = {
+                "thoughts": final_thoughts_list, # 수정된 thoughts 리스트 반환
+                "current_thoughts_to_evaluate": [] # 평가 완료
+            }
+            if any_evaluation_done:
+                update_payload["last_llm_output"] = f"Evaluations completed for thoughts: {', '.join(state.current_thoughts_to_evaluate)}. Summary: {log_summary_str}"
+            if error_message:
+                update_payload["error_message"] = error_message
+
+            await self.notification_service.broadcast_to_task(
+                state.task_id,
+                StatusUpdateMessage(
+                    task_id=state.task_id, status="node_completed",
+                    detail=f"Node '{self.node_id}' (State Evaluator) finished. Evaluated {len(state.current_thoughts_to_evaluate)} thoughts.",
+                    current_node=self.node_id, next_node="search_strategy"
                 )
-
-        final_thoughts_list = list(updated_thoughts_map.values())
-        log_summary_str = ', '.join(evaluations_summary_for_log) if evaluations_summary_for_log else 'No new evaluations.'
-        logger.info(f"Node '{self.node_id}' (Task: {state.task_id}): Evaluations completed. Summary: {log_summary_str}")
-
-        update_payload = {
-            "thoughts": final_thoughts_list, # 수정된 thoughts 리스트 반환
-            "current_thoughts_to_evaluate": [] # 평가 완료
-        }
-        if any_evaluation_done:
-            update_payload["last_llm_output"] = f"Evaluations completed for thoughts: {', '.join(state.current_thoughts_to_evaluate)}. Summary: {log_summary_str}"
-        if error_message:
-            update_payload["error_message"] = error_message
-
-        await self.notification_service.broadcast_to_task(
-            state.task_id,
-            StatusUpdateMessage(
-                task_id=state.task_id, status="node_completed",
-                detail=f"Node '{self.node_id}' (State Evaluator) finished. Evaluated {len(state.current_thoughts_to_evaluate)} thoughts.",
-                current_node=self.node_id, next_node="search_strategy"
             )
-        )
-        return update_payload
+            return update_payload

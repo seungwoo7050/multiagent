@@ -10,7 +10,7 @@ from langchain_core.runnables import RunnableConfig
 from langchain_core.prompts import PromptTemplate
 
 from src.config.settings import get_settings
-from src.config.logger import get_logger
+from src.utils.logger import get_logger
 from src.config.errors import ToolError
 from src.services.llm_client import LLMClient
 from src.services.tool_manager import ToolManager
@@ -18,6 +18,9 @@ from src.memory.memory_manager import MemoryManager
 from src.schemas.mcp_models import AgentGraphState, ConversationTurn
 from src.services.notification_service import NotificationService # 추가
 from src.schemas.websocket_models import StatusUpdateMessage, IntermediateResultMessage # 추가
+from opentelemetry import trace
+
+tracer = trace.get_tracer(__name__)
 
 
 _bt.os = os
@@ -271,7 +274,16 @@ class GenericLLMNode:
             return None
 
     async def __call__(self, state: AgentGraphState, config: Optional[RunnableConfig] = None) -> Dict[str, Any]: # <--- 이미 async
-        logger.info(f"GenericLLMNode '{self.node_id}' execution started. Tool use enabled: {self.enable_tool_use}")
+        with tracer.start_as_current_span(
+            "graph.node.generic_llm",
+            attributes={
+                "node_id": self.node_id,
+                "task_id": state.task_id,
+                "model": self.model_name or "default",
+                "enable_tool_use": self.enable_tool_use
+            }
+        ):
+            logger.info(f"GenericLLMNode '{self.node_id}' execution started. Tool use enabled: {self.enable_tool_use}")
         
         await self.notification_service.broadcast_to_task(
             state.task_id,

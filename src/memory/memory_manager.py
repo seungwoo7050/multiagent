@@ -5,8 +5,11 @@ import time
 from typing import Any, Dict, List, Optional, TypeVar
 from cachetools import TTLCache, keys
 
+from opentelemetry import trace
+
+
 from src.config.settings import get_settings
-from src.config.logger import get_logger
+from src.utils.logger import get_logger
 from src.config.errors import ErrorCode, MemoryError, convert_exception
 # memory_store 모듈의 함수들을 임포트합니다.
 from src.memory import memory_store
@@ -15,6 +18,7 @@ from src.memory import memory_store
 # 만약 generate_memory_key가 다른 곳에 있다면 경로 수정 필요
 from src.utils.ids import generate_uuid # 예시 ID 생성기 (키 생성은 직접 구현)
 
+tracer = trace.get_tracer(__name__)
 logger = get_logger(__name__)
 settings = get_settings()
 
@@ -263,7 +267,13 @@ class MemoryManager:
 
     async def get_history(self, context_id: str, history_key_prefix: str, limit: Optional[int] = None) -> List[Any]:
         full_prefix = self._get_history_key_prefix(context_id, history_key_prefix)
-        logger.debug(f"Getting history for prefix: '{full_prefix}', limit: {limit}")
+        with tracer.start_as_current_span(
+            "memory.vector.history",
+            attributes={"context_id": context_id, "prefix": history_key_prefix}
+        ):
+            logger.debug(f"Getting history for prefix: '{full_prefix}', limit: {limit}")
+            return await memory_store.get_history(full_prefix, limit)
+
         try:
             # 캐시 없이 직접 memory_store 호출
             return await memory_store.get_history(full_prefix, limit)

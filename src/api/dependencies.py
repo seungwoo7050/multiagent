@@ -3,7 +3,7 @@ import asyncio
 from typing import Annotated, cast, AsyncGenerator, Optional
 from fastapi import Depends, HTTPException, status
 
-from src.config.logger import get_logger
+from src.utils.logger import get_logger
 from src.config.settings import get_settings
 from src.memory.memory_manager import MemoryManager, get_memory_manager
 from src.agents.orchestrator import Orchestrator as NewOrchestrator

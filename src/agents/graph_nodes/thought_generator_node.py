@@ -5,12 +5,15 @@ from typing import Any, Dict, List, Optional
 
 from langchain_core.runnables import RunnableConfig
 
-from src.config.logger import get_logger
+from src.utils.logger import get_logger
 from src.config.settings import get_settings # settings 임포트 추가
 from src.services.llm_client import LLMClient
 from src.schemas.mcp_models import AgentGraphState, Thought
 from src.services.notification_service import NotificationService # 추가
 from src.schemas.websocket_models import StatusUpdateMessage, IntermediateResultMessage # 추가
+from opentelemetry import trace
+tracer = trace.get_tracer(__name__)
+
 
 logger = get_logger(__name__)
 settings = get_settings() # settings 인스턴스
@@ -174,80 +177,90 @@ class ThoughtGeneratorNode:
         state: AgentGraphState,
         config: Optional[RunnableConfig] = None
     ) -> Dict[str, Any]:
-        logger.info(f"ThoughtGeneratorNode '{self.node_id}' execution started. Task ID: {state.task_id}")
-        await self.notification_service.broadcast_to_task(
-            state.task_id,
-            StatusUpdateMessage(task_id=state.task_id, status="node_executing", detail=f"Node '{self.node_id}' (Thought Generator) started.", current_node=self.node_id)
-        )
-
-        error_message: Optional[str] = None
-        generated_thought_contents: List[str] = [] # 초기화
-
-        if state.search_depth >= state.max_search_depth:
-            logger.info(
-                f"Node '{self.node_id}': Max search depth ({state.max_search_depth}) reached. No new thoughts generated for task {state.task_id}."
-            )
-            # 최대 깊이 도달 알림
+        with tracer.start_as_current_span(
+            "graph.node.thought_generator",
+            attributes={
+                "node_id": self.node_id,
+                "task_id": state.task_id,
+                "num_thoughts": self.num_thoughts,
+                "search_depth": state.search_depth,
+            },
+        ):
+            
+            logger.info(f"ThoughtGeneratorNode '{self.node_id}' execution started. Task ID: {state.task_id}")
             await self.notification_service.broadcast_to_task(
                 state.task_id,
-                StatusUpdateMessage(task_id=state.task_id, status="node_completed", detail=f"Node '{self.node_id}' finished: Max search depth reached.", current_node=self.node_id)
+                StatusUpdateMessage(task_id=state.task_id, status="node_executing", detail=f"Node '{self.node_id}' (Thought Generator) started.", current_node=self.node_id)
             )
-            return {
-                "current_thoughts_to_evaluate": [],
-                "error_message": "Max search depth reached."
-            }
 
-        try:
-            generation_prompt = self._construct_prompt(state)
-            logger.debug(f"Node '{self.node_id}' (Task: {state.task_id}): Generation prompt constructed.")
+            error_message: Optional[str] = None
+            generated_thought_contents: List[str] = [] # 초기화
 
-            full_response = await self.llm_client.generate_response(
-                messages=[{"role": "user", "content": generation_prompt}],
-                model_name=self.model_name,
-                temperature=self.temperature,
-                max_tokens=self.max_tokens_per_thought * self.num_thoughts # 적절한 max_tokens 설정
-            )
-            logger.debug(f"Node '{self.node_id}' (Task: {state.task_id}): LLM response received.")
-
-            generated_thought_contents = ThoughtGeneratorNode._extract_thoughts(full_response)
-            generated_thought_contents = generated_thought_contents[: self.num_thoughts] # 요청한 수만큼만 사용
-
-            if not generated_thought_contents:
-                logger.warning(f"Node '{self.node_id}' (Task: {state.task_id}): LLM did not generate any valid thoughts from response: {full_response[:200]}...")
-                error_message = f"LLM did not generate thoughts in node '{self.node_id}'."
-            else:
-                # 생성된 생각들에 대한 중간 결과 알림
+            if state.search_depth >= state.max_search_depth:
+                logger.info(
+                    f"Node '{self.node_id}': Max search depth ({state.max_search_depth}) reached. No new thoughts generated for task {state.task_id}."
+                )
+                # 최대 깊이 도달 알림
                 await self.notification_service.broadcast_to_task(
                     state.task_id,
-                    IntermediateResultMessage(
-                        task_id=state.task_id,
-                        node_id=self.node_id,
-                        result_step_name="thoughts_generated",
-                        data={"generated_count": len(generated_thought_contents), "thoughts_preview": [t[:100]+"..." for t in generated_thought_contents]}
-                    )
+                    StatusUpdateMessage(task_id=state.task_id, status="node_completed", detail=f"Node '{self.node_id}' finished: Max search depth reached.", current_node=self.node_id)
                 )
+                return {
+                    "current_thoughts_to_evaluate": [],
+                    "error_message": "Max search depth reached."
+                }
 
-        except Exception as e:
-            logger.error(f"Node '{self.node_id}' (Task: {state.task_id}): Error during thought generation: {e}", exc_info=True)
-            error_message = f"Error in ThoughtGeneratorNode '{self.node_id}': {e}"
-            generated_thought_contents = [] # 오류 시 빈 리스트로 설정
+            try:
+                generation_prompt = self._construct_prompt(state)
+                logger.debug(f"Node '{self.node_id}' (Task: {state.task_id}): Generation prompt constructed.")
 
-        newly_added_thought_ids: List[str] = []
-        if generated_thought_contents: # 생성된 내용이 있을 때만 추가
-            for content in generated_thought_contents:
-                new_thought = state.add_thought(content=content, parent_id=state.current_best_thought_id) # add_thought는 state를 직접 수정
-                newly_added_thought_ids.append(new_thought.id)
-            if newly_added_thought_ids:
-                logger.info(f"Node '{self.node_id}' (Task: {state.task_id}): Generated and added {len(newly_added_thought_ids)} new thoughts to state.")
+                full_response = await self.llm_client.generate_response(
+                    messages=[{"role": "user", "content": generation_prompt}],
+                    model_name=self.model_name,
+                    temperature=self.temperature,
+                    max_tokens=self.max_tokens_per_thought * self.num_thoughts # 적절한 max_tokens 설정
+                )
+                logger.debug(f"Node '{self.node_id}' (Task: {state.task_id}): LLM response received.")
 
-        await self.notification_service.broadcast_to_task(
-            state.task_id,
-            StatusUpdateMessage(task_id=state.task_id, status="node_completed", detail=f"Node '{self.node_id}' (Thought Generator) finished. Generated {len(newly_added_thought_ids)} thoughts.", current_node=self.node_id, next_node="state_evaluator") # 예상 다음 노드 명시
-        )
+                generated_thought_contents = ThoughtGeneratorNode._extract_thoughts(full_response)
+                generated_thought_contents = generated_thought_contents[: self.num_thoughts] # 요청한 수만큼만 사용
 
-        return {
-            "thoughts": state.thoughts, # 수정된 thoughts 리스트 반환
-            "current_thoughts_to_evaluate": newly_added_thought_ids,
-            "last_llm_output": generated_thought_contents if generated_thought_contents else (error_message or "No thoughts generated."),
-            "error_message": error_message
-        }
+                if not generated_thought_contents:
+                    logger.warning(f"Node '{self.node_id}' (Task: {state.task_id}): LLM did not generate any valid thoughts from response: {full_response[:200]}...")
+                    error_message = f"LLM did not generate thoughts in node '{self.node_id}'."
+                else:
+                    # 생성된 생각들에 대한 중간 결과 알림
+                    await self.notification_service.broadcast_to_task(
+                        state.task_id,
+                        IntermediateResultMessage(
+                            task_id=state.task_id,
+                            node_id=self.node_id,
+                            result_step_name="thoughts_generated",
+                            data={"generated_count": len(generated_thought_contents), "thoughts_preview": [t[:100]+"..." for t in generated_thought_contents]}
+                        )
+                    )
+
+            except Exception as e:
+                logger.error(f"Node '{self.node_id}' (Task: {state.task_id}): Error during thought generation: {e}", exc_info=True)
+                error_message = f"Error in ThoughtGeneratorNode '{self.node_id}': {e}"
+                generated_thought_contents = [] # 오류 시 빈 리스트로 설정
+
+            newly_added_thought_ids: List[str] = []
+            if generated_thought_contents: # 생성된 내용이 있을 때만 추가
+                for content in generated_thought_contents:
+                    new_thought = state.add_thought(content=content, parent_id=state.current_best_thought_id) # add_thought는 state를 직접 수정
+                    newly_added_thought_ids.append(new_thought.id)
+                if newly_added_thought_ids:
+                    logger.info(f"Node '{self.node_id}' (Task: {state.task_id}): Generated and added {len(newly_added_thought_ids)} new thoughts to state.")
+
+            await self.notification_service.broadcast_to_task(
+                state.task_id,
+                StatusUpdateMessage(task_id=state.task_id, status="node_completed", detail=f"Node '{self.node_id}' (Thought Generator) finished. Generated {len(newly_added_thought_ids)} thoughts.", current_node=self.node_id, next_node="state_evaluator") # 예상 다음 노드 명시
+            )
+
+            return {
+                "thoughts": state.thoughts, # 수정된 thoughts 리스트 반환
+                "current_thoughts_to_evaluate": newly_added_thought_ids,
+                "last_llm_output": generated_thought_contents if generated_thought_contents else (error_message or "No thoughts generated."),
+                "error_message": error_message
+            }

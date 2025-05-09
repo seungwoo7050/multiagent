@@ -4,7 +4,7 @@ from redis.asyncio.connection import ConnectionPool
 from typing import Optional
 
 from src.config.settings import get_settings
-from src.config.logger import get_logger
+from src.utils.logger import get_logger
 from src.config.errors import ConnectionError, ErrorCode # ConnectionError 임포트 추가
 
 logger = get_logger(__name__)

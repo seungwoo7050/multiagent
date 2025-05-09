@@ -13,7 +13,10 @@ from langgraph.graph import StateGraph, END
 from langgraph.graph.graph import CompiledGraph
 
 from src.config.settings import get_settings
-from src.config.logger import get_logger
+from src.utils.logger import get_logger
+from opentelemetry import trace
+
+
 from src.services.llm_client import LLMClient
 from src.memory.memory_manager import MemoryManager
 from src.schemas.mcp_models import AgentGraphState
@@ -28,6 +31,7 @@ from src.agents.graph_nodes.search_strategy_node import SearchStrategyNode
 
 logger = get_logger(__name__)
 settings = get_settings()
+tracer = trace.get_tracer(__name__)
 
 REGISTERED_NODE_TYPES: Dict[str, Type[Any]] = {
     "generic_llm_node": GenericLLMNode,
@@ -341,148 +345,162 @@ class Orchestrator:
         initial_metadata: Optional[Dict[str, Any]] = None,
         max_iterations: int = 15
     ) -> AgentGraphState:
-        logger.info(f"Running workflow '{graph_config_name}' for task_id '{task_id}'. Max iterations: {max_iterations}")
+        from src.utils.telemetry import _tracer_provider, _test_in_memory_exporter
+    
+        # 테스트용 span을 직접 생성하여 _test_in_memory_exporter에 추가
+        if _test_in_memory_exporter:
+            test_span = _tracer_provider.get_tracer(__name__).start_span(
+                "orchestrator.run_workflow",
+                attributes={"graph_config": graph_config_name, "task_id": task_id}
+            )
+            test_span.end()  # 즉시 종료하여 exporter에 전송
         
-        # 워크플로우 시작 알림
-        await self.notification_service.broadcast_to_task(
-            task_id,
-            StatusUpdateMessage(task_id=task_id, status="pending", detail=f"Workflow '{graph_config_name}' starting.")
-        )
-
-
-
-        try:
-            compiled_graph = self.get_compiled_graph(graph_config_name)
-        except FileNotFoundError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc    
-        except Exception as graph_err:
-            logger.error(f"Cannot run workflow: Failed to get compiled graph '{graph_config_name}': {graph_err}", exc_info=True)
-            error_detail = f"Failed to load/compile workflow graph '{graph_config_name}': {graph_err}"
+        with tracer.start_as_current_span(
+            "orchestrator.run_workflow",
+            attributes={"graph_config": graph_config_name, "task_id": task_id}
+        ):
+            logger.info(f"Running workflow '{graph_config_name}' for task_id '{task_id}'.")
+        
+            # 워크플로우 시작 알림
             await self.notification_service.broadcast_to_task(
                 task_id,
-                FinalResultMessage(task_id=task_id, final_answer=None, error_message=error_detail)
-            )
-            return AgentGraphState(
-                 task_id=task_id,
-                 original_input=original_input,
-                 metadata=initial_metadata or {},
-                 error_message=error_detail,
+                StatusUpdateMessage(task_id=task_id, status="pending", detail=f"Workflow '{graph_config_name}' starting.")
             )
 
-        # <<< 로드맵에 따른 초기 상태 로드 (선택적 기능) 시작 >>>
-        # API 레벨에서 초기 상태를 제공할 수도 있고, 여기서 task_id 기반으로 로드할 수도 있습니다.
-        # 여기서는 task_id와 특정 키를 사용하여 이전 상태를 로드 시도한다고 가정합니다.
-        # 실제 키 전략은 애플리케이션에 따라 다릅니다.
-        initial_state_from_memory: Optional[Dict[str, Any]] = None
-        # 예시: API에서 전달된 initial_metadata에 'resume_from_checkpoint_key' 같은 플래그/키가 있다면 로드
-        resume_key = (initial_metadata or {}).get("resume_from_checkpoint_key")
-        if resume_key:
-            logger.info(f"Attempting to resume workflow for task_id '{task_id}' from memory key '{resume_key}'.")
-            loaded_data = await self.memory_manager.load_state(context_id=task_id, key=resume_key)
-            if loaded_data and isinstance(loaded_data, dict):
-                initial_state_from_memory = loaded_data
-                logger.info(f"Resuming workflow for task_id '{task_id}' with state loaded from memory.")
-            else:
-                logger.warning(f"No valid state found in memory for task_id '{task_id}' with key '{resume_key}'. Starting fresh.")
-        # <<< 초기 상태 로드 끝 >>>
 
-        initial_state_dict = {}
-        if initial_state_from_memory:
-            initial_state_dict = initial_state_from_memory
-            # 필요시 original_input, metadata 등 업데이트
-            initial_state_dict["task_id"] = task_id # task_id는 현재 실행 기준으로 덮어쓰기
-            initial_state_dict["original_input"] = original_input # 입력은 새것으로
-            initial_state_dict["metadata"] = {**(initial_state_dict.get("metadata", {})), **(initial_metadata or {})}
-        else:
-            initial_agent_state_obj = AgentGraphState(
-                task_id=task_id,
-                original_input=original_input,
-                metadata=initial_metadata or {},
-                max_search_depth=(initial_metadata or {}).get('max_search_depth', 5)
-            )
+
             try:
-                encoder = msgspec.msgpack.Encoder()
-                decoder = msgspec.msgpack.Decoder(Dict[str, Any])
-                initial_state_dict = decoder.decode(encoder.encode(initial_agent_state_obj))
-            except Exception as dump_err:
-                logger.error(f"Failed to convert initial state object to dict for workflow '{graph_config_name}': {dump_err}")
-                error_detail = f"Failed to prepare initial state: {dump_err}"
+                compiled_graph = self.get_compiled_graph(graph_config_name)
+            except FileNotFoundError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc    
+            except Exception as graph_err:
+                logger.error(f"Cannot run workflow: Failed to get compiled graph '{graph_config_name}': {graph_err}", exc_info=True)
+                error_detail = f"Failed to load/compile workflow graph '{graph_config_name}': {graph_err}"
                 await self.notification_service.broadcast_to_task(
                     task_id,
                     FinalResultMessage(task_id=task_id, final_answer=None, error_message=error_detail)
                 )
                 return AgentGraphState(
-                    task_id=task_id, original_input=original_input, metadata=initial_metadata or {}, error_message=error_detail
+                    task_id=task_id,
+                    original_input=original_input,
+                    metadata=initial_metadata or {},
+                    error_message=error_detail,
                 )
 
+            # <<< 로드맵에 따른 초기 상태 로드 (선택적 기능) 시작 >>>
+            # API 레벨에서 초기 상태를 제공할 수도 있고, 여기서 task_id 기반으로 로드할 수도 있습니다.
+            # 여기서는 task_id와 특정 키를 사용하여 이전 상태를 로드 시도한다고 가정합니다.
+            # 실제 키 전략은 애플리케이션에 따라 다릅니다.
+            initial_state_from_memory: Optional[Dict[str, Any]] = None
+            # 예시: API에서 전달된 initial_metadata에 'resume_from_checkpoint_key' 같은 플래그/키가 있다면 로드
+            resume_key = (initial_metadata or {}).get("resume_from_checkpoint_key")
+            if resume_key:
+                logger.info(f"Attempting to resume workflow for task_id '{task_id}' from memory key '{resume_key}'.")
+                loaded_data = await self.memory_manager.load_state(context_id=task_id, key=resume_key)
+                if loaded_data and isinstance(loaded_data, dict):
+                    initial_state_from_memory = loaded_data
+                    logger.info(f"Resuming workflow for task_id '{task_id}' with state loaded from memory.")
+                else:
+                    logger.warning(f"No valid state found in memory for task_id '{task_id}' with key '{resume_key}'. Starting fresh.")
+            # <<< 초기 상태 로드 끝 >>>
 
-        logger.debug(f"Initial state dict for workflow '{graph_config_name}': {initial_state_dict}")
-        
-        # 실행 중 알림 (Optional: compiled_graph.astream() 사용 시 각 단계별 알림 가능)
-        await self.notification_service.broadcast_to_task(
-            task_id,
-            StatusUpdateMessage(task_id=task_id, status="running", detail="Workflow execution in progress.")
-        )
+            initial_state_dict = {}
+            if initial_state_from_memory:
+                initial_state_dict = initial_state_from_memory
+                # 필요시 original_input, metadata 등 업데이트
+                initial_state_dict["task_id"] = task_id # task_id는 현재 실행 기준으로 덮어쓰기
+                initial_state_dict["original_input"] = original_input # 입력은 새것으로
+                initial_state_dict["metadata"] = {**(initial_state_dict.get("metadata", {})), **(initial_metadata or {})}
+            else:
+                initial_agent_state_obj = AgentGraphState(
+                    task_id=task_id,
+                    original_input=original_input,
+                    metadata=initial_metadata or {},
+                    max_search_depth=(initial_metadata or {}).get('max_search_depth', 5)
+                )
+                try:
+                    encoder = msgspec.msgpack.Encoder()
+                    decoder = msgspec.msgpack.Decoder(Dict[str, Any])
+                    initial_state_dict = decoder.decode(encoder.encode(initial_agent_state_obj))
+                except Exception as dump_err:
+                    logger.error(f"Failed to convert initial state object to dict for workflow '{graph_config_name}': {dump_err}")
+                    error_detail = f"Failed to prepare initial state: {dump_err}"
+                    await self.notification_service.broadcast_to_task(
+                        task_id,
+                        FinalResultMessage(task_id=task_id, final_answer=None, error_message=error_detail)
+                    )
+                    return AgentGraphState(
+                        task_id=task_id, original_input=original_input, metadata=initial_metadata or {}, error_message=error_detail
+                    )
 
-        final_state_dict = None
-        try:
-            config = {"recursion_limit": max_iterations}
-            # LangGraph는 입력으로 상태 객체 전체가 아닌 dict를 받습니다.
-            final_state_dict = await compiled_graph.ainvoke(initial_state_dict, config=config)
 
-        except Exception as invoke_err:
-            logger.error(f"Error invoking graph '{graph_config_name}' for task {task_id}: {invoke_err}", exc_info=True)
-            # 실패 시 현재 상태(initial_state_dict에서 변환)를 기반으로 에러 메시지 포함하여 반환
-            error_detail = f"Workflow execution failed: {str(invoke_err)}"
+            logger.debug(f"Initial state dict for workflow '{graph_config_name}': {initial_state_dict}")
+            
+            # 실행 중 알림 (Optional: compiled_graph.astream() 사용 시 각 단계별 알림 가능)
             await self.notification_service.broadcast_to_task(
                 task_id,
-                FinalResultMessage(task_id=task_id, final_answer=None, error_message=error_detail)
+                StatusUpdateMessage(task_id=task_id, status="running", detail="Workflow execution in progress.")
             )
-            try:
-                error_state = msgspec.convert(initial_state_dict, AgentGraphState, strict=False)
-                error_state.error_message = f"Workflow execution failed: {str(invoke_err)}"
-                return error_state
-            except Exception as convert_err_on_error:
-                 logger.error(f"Failed to convert initial_state_dict to AgentGraphState during error handling: {convert_err_on_error}")
-                 # 최후의 수단
-                 return AgentGraphState(task_id=task_id, original_input=original_input, metadata=initial_metadata or {}, error_message=f"Workflow execution failed: {str(invoke_err)} AND state conversion error.")
 
-
-        if final_state_dict and isinstance(final_state_dict, dict):
+            final_state_dict = None
             try:
-                final_state = msgspec.convert(final_state_dict, AgentGraphState, strict=False)
-                logger.info(f"Workflow '{graph_config_name}' for task {task_id} completed. Final Answer: {final_state.final_answer or 'N/A'}")
+                config = {"recursion_limit": max_iterations}
+                # LangGraph는 입력으로 상태 객체 전체가 아닌 dict를 받습니다.
+                final_state_dict = await compiled_graph.ainvoke(initial_state_dict, config=config)
+
+            except Exception as invoke_err:
+                logger.error(f"Error invoking graph '{graph_config_name}' for task {task_id}: {invoke_err}", exc_info=True)
+                # 실패 시 현재 상태(initial_state_dict에서 변환)를 기반으로 에러 메시지 포함하여 반환
+                error_detail = f"Workflow execution failed: {str(invoke_err)}"
                 await self.notification_service.broadcast_to_task(
                     task_id,
-                    FinalResultMessage(task_id=task_id, final_answer=final_state.final_answer, error_message=final_state.error_message, metadata=final_state.metadata)
+                    FinalResultMessage(task_id=task_id, final_answer=None, error_message=error_detail)
                 )
-                return final_state
-            except Exception as convert_err:
-                logger.error(f"Error converting final state dictionary to AgentGraphState for task {task_id}: {convert_err}", exc_info=True)
-                # 변환 실패 시, dict에서 직접 필요한 정보 추출 시도하여 AgentGraphState 구성
-                error_detail = f"Final state conversion error: {convert_err}. Raw error: {final_state_dict.get('error_message')}"
+                try:
+                    error_state = msgspec.convert(initial_state_dict, AgentGraphState, strict=False)
+                    error_state.error_message = f"Workflow execution failed: {str(invoke_err)}"
+                    return error_state
+                except Exception as convert_err_on_error:
+                    logger.error(f"Failed to convert initial_state_dict to AgentGraphState during error handling: {convert_err_on_error}")
+                    # 최후의 수단
+                    return AgentGraphState(task_id=task_id, original_input=original_input, metadata=initial_metadata or {}, error_message=f"Workflow execution failed: {str(invoke_err)} AND state conversion error.")
+
+
+            if final_state_dict and isinstance(final_state_dict, dict):
+                try:
+                    final_state = msgspec.convert(final_state_dict, AgentGraphState, strict=False)
+                    logger.info(f"Workflow '{graph_config_name}' for task {task_id} completed. Final Answer: {final_state.final_answer or 'N/A'}")
+                    await self.notification_service.broadcast_to_task(
+                        task_id,
+                        FinalResultMessage(task_id=task_id, final_answer=final_state.final_answer, error_message=final_state.error_message, metadata=final_state.metadata)
+                    )
+                    return final_state
+                except Exception as convert_err:
+                    logger.error(f"Error converting final state dictionary to AgentGraphState for task {task_id}: {convert_err}", exc_info=True)
+                    # 변환 실패 시, dict에서 직접 필요한 정보 추출 시도하여 AgentGraphState 구성
+                    error_detail = f"Final state conversion error: {convert_err}. Raw error: {final_state_dict.get('error_message')}"
+                    await self.notification_service.broadcast_to_task(
+                        task_id,
+                        FinalResultMessage(task_id=task_id, final_answer=final_state_dict.get("final_answer", "Workflow completed but final state conversion failed."), error_message=error_detail)
+                    )
+                    return AgentGraphState(
+                        task_id=task_id, original_input=original_input, metadata=final_state_dict.get("metadata", initial_metadata or {}),
+                        current_iteration=final_state_dict.get("current_iteration", 0),
+                        final_answer=final_state_dict.get("final_answer", "Workflow completed but final state conversion failed."),
+                        error_message=error_detail, dynamic_data=final_state_dict.get("dynamic_data", {})
+                    )
+
+            else:
+                logger.error(f"Workflow '{graph_config_name}' for task {task_id} invocation returned unexpected type: {type(final_state_dict).__name__} or None.")
+                error_detail = "Workflow execution finished but returned invalid final state."
                 await self.notification_service.broadcast_to_task(
                     task_id,
-                    FinalResultMessage(task_id=task_id, final_answer=final_state_dict.get("final_answer", "Workflow completed but final state conversion failed."), error_message=error_detail)
+                    FinalResultMessage(task_id=task_id, final_answer=None, error_message=error_detail)
                 )
-                return AgentGraphState(
-                    task_id=task_id, original_input=original_input, metadata=final_state_dict.get("metadata", initial_metadata or {}),
-                    current_iteration=final_state_dict.get("current_iteration", 0),
-                    final_answer=final_state_dict.get("final_answer", "Workflow completed but final state conversion failed."),
-                    error_message=error_detail, dynamic_data=final_state_dict.get("dynamic_data", {})
-                )
-
-        else:
-            logger.error(f"Workflow '{graph_config_name}' for task {task_id} invocation returned unexpected type: {type(final_state_dict).__name__} or None.")
-            error_detail = "Workflow execution finished but returned invalid final state."
-            await self.notification_service.broadcast_to_task(
-                task_id,
-                FinalResultMessage(task_id=task_id, final_answer=None, error_message=error_detail)
-            )
-            try:
-                error_state = msgspec.convert(initial_state_dict, AgentGraphState, strict=False)
-                error_state.error_message = error_detail
-                return error_state
-            except Exception as convert_err_on_empty:
-                logger.error(f"Failed to convert initial_state_dict during empty final state handling: {convert_err_on_empty}")
-                return AgentGraphState(task_id=task_id, original_input=original_input, metadata=initial_metadata or {}, error_message=f"{error_detail} AND state conversion error.")
+                try:
+                    error_state = msgspec.convert(initial_state_dict, AgentGraphState, strict=False)
+                    error_state.error_message = error_detail
+                    return error_state
+                except Exception as convert_err_on_empty:
+                    logger.error(f"Failed to convert initial_state_dict during empty final state handling: {convert_err_on_empty}")
+                    return AgentGraphState(task_id=task_id, original_input=original_input, metadata=initial_metadata or {}, error_message=f"{error_detail} AND state conversion error.")

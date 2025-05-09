@@ -4,7 +4,7 @@ from collections import defaultdict
 from typing import DefaultDict, List, Dict, Any, Optional
 from fastapi import WebSocket # WebSocket 타입을 위해 임포트
 
-from src.config.logger import get_logger
+from src.utils.logger import get_logger
 # 이전 단계에서 정의한 WebSocket 메시지 모델들을 임포트합니다.
 from src.schemas.websocket_models import WebSocketMessageBase
 

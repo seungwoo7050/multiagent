@@ -13,7 +13,7 @@ from pydantic import BaseModel
 # BaseTool import 경로 확인 및 수정 (이제 base는 tools 아래에 있음)
 from src.tools.base import BaseTool
 from src.config.errors import ErrorCode, ToolError
-from src.config.logger import get_logger
+from src.utils.logger import get_logger
 # 메트릭 관련 코드는 필요시 활성화
 # from src.config.metrics import REGISTRY_OPERATION_DURATION, get_metrics_manager
 

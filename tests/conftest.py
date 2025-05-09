@@ -7,6 +7,15 @@ import pytest
 import asyncio, functools
 from unittest.mock import MagicMock, AsyncMock # AsyncMock 추가 (비동기 메서드 모킹용)
 from fastapi.testclient import TestClient
+from src.agents.orchestrator import Orchestrator
+from src.services.llm_client import LLMClient
+from src.services.tool_manager import ToolManager # 실제 사용하는 클래스로 변경
+from src.memory.memory_manager import MemoryManager # 실제 사용하는 클래스로 변경
+from src.services.notification_service import NotificationService
+
+from src.utils.telemetry import setup_telemetry, clear_test_spans
+
+setup_telemetry(for_testing=True)
 
 from src.api.dependencies import get_memory_manager
 from src.api.app import app
@@ -22,6 +31,14 @@ except ImportError:
     NOTIFICATION_SERVICE_AVAILABLE = False
     print("Warning: src.services.notification_service not found, mock fixture might be incomplete.")
 
+@pytest.fixture(autouse=True, scope="function") # "session" 또는 "function" scope 사용 가능
+def otel_test_setup():
+    # 각 테스트 전에 InMemoryExporter로 강제 재설정
+    setup_telemetry(force_setup=True, for_testing=True)
+    yield
+    # 각 테스트 후 Span 정리 (선택 사항)
+    clear_test_spans()
+    
 @pytest.fixture
 def mock_notification_service() -> MagicMock:
     """NotificationService의 목 객체를 반환하는 fixture."""
@@ -162,3 +179,40 @@ async def async_test_client():
     """
     async with AsyncTestClient(app) as client:
         yield client
+
+
+@pytest.fixture
+def mock_llm_client():
+    return MagicMock(spec=LLMClient)
+
+@pytest.fixture
+def mock_tool_manager():
+    # 실제 ToolManager 생성 또는 모킹 방식에 따라 수정
+    mock = MagicMock(spec=ToolManager)
+    mock.name = "MockedToolManager" # Orchestrator 초기화 시 사용될 수 있음
+    return mock
+
+@pytest.fixture
+def mock_memory_manager():
+    return MagicMock(spec=MemoryManager)
+
+@pytest.fixture
+def mock_notification_service():
+    return MagicMock(spec=NotificationService)
+
+
+        
+@pytest.fixture
+def orchestrator_instance(mock_llm_client, mock_tool_manager, mock_memory_manager, mock_notification_service):
+    # Orchestrator 생성자에 필요한 모든 의존성을 전달해야 합니다.
+    # telemetry.py의 setup_telemetry는 테스트 시작 시 이미 호출되었다고 가정합니다.
+    try:
+        instance = Orchestrator(
+            llm_client=mock_llm_client,
+            tool_manager=mock_tool_manager,
+            memory_manager=mock_memory_manager,
+            notification_service=mock_notification_service
+        )
+        return instance
+    except Exception as e:
+        pytest.fail(f"Failed to create orchestrator_instance: {e}")

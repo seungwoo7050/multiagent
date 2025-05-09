@@ -10,7 +10,7 @@ from src.tools.base import BaseTool
 # from langchain_core.tools import Tool # 필요시 LangChain Tool 직접 사용 가능
 
 from src.config.errors import ErrorCode, ToolError
-from src.config.logger import get_logger
+from src.utils.logger import get_logger
 from src.services.tool_manager import register_tool
 
 logger = get_logger(__name__)
