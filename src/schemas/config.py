@@ -6,9 +6,12 @@ from pydantic import Field, field_validator, ValidationInfo, ConfigDict, BaseMod
 from pydantic_settings import BaseSettings
 import json
 import logging
+from pathlib import Path
 
 
 _logger = logging.getLogger(__name__) # 로깅을 위해 추가
+
+PROJECT_ROOT_DIR = Path(__file__).resolve().parent.parent
 
 class LLMProviderSettings(BaseModel):
     api_key: str = Field(..., alias="API_KEY", description="LLM API 키")
@@ -29,15 +32,21 @@ class AppSettings(BaseSettings):
     APP_VERSION: str = '0.1.0'
     ENVIRONMENT: Literal['development', 'production'] = 'development'
     DEBUG: bool = False
-
+    
     # Logging
     LOG_LEVEL: Literal['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'] = 'INFO'
     LOG_FORMAT: Literal['json', 'text'] = 'json'
     LOG_TO_FILE: bool = False
     LOG_FILE_PATH: Optional[str] = None
-
-    # Agent Config
-    AGENT_CONFIG_FILE_PATH: str = 'configs/agent_configs.json' # 로드맵에 명시된 기본 경로
+    
+    AGENT_GRAPH_CONFIG_DIR: str = Field(
+        default=str(PROJECT_ROOT_DIR / "config" / "agent_graphs"),
+        description="Directory for dynamic agent graph configurations (e.g., JSON files)"
+    )
+    PROMPT_TEMPLATE_DIR: str = Field( # 로드맵에 언급된 프롬프트 경로도 추가
+        default=str(PROJECT_ROOT_DIR / "config" / "prompts"),
+        description="Directory for prompt template files"
+    )
 
     # Worker/Task Config
     WORKER_COUNT: int = Field(default_factory=lambda: max(os.cpu_count() or 1, 1))

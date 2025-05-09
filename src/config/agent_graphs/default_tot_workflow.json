@@ -1,60 +1,63 @@
 {
-    "name": "DefaultTreeOfThoughtsWorkflow",
-    "description": "A default Tree of Thoughts workflow for complex problem solving.",
-    "entry_point": "thought_generator",
-    "nodes": [
-      {
-        "id": "thought_generator",
-        "node_type": "thought_generator_node",
-        "parameters": {
-          "num_thoughts": 3,
-          "max_tokens_per_thought": 150,
-          "temperature": 0.7,
-          "prompt_template_path": "tot/generate_thoughts_v1.txt",
-          "node_id": "ToT_Generator"
-        }
-      },
-      {
-        "id": "state_evaluator",
-        "node_type": "state_evaluator_node",
-        "parameters": {
-          "max_tokens_per_eval": 100,
-          "temperature": 0.4,
-          "prompt_template_path": "tot/evaluate_state_v1.txt",
-          "node_id": "ToT_Evaluator"
-        }
-      },
-      {
-        "id": "search_strategy",
-        "node_type": "search_strategy_node",
-        "parameters": {
-          "beam_width": 1,
-          "score_threshold_to_finish": 0.9,
-          "min_score_to_continue": 0.2,
-          "node_id": "ToT_Strategy"
-        }
+  "name": "DefaultTreeOfThoughtsWorkflow",
+  "description": "A default Tree of Thoughts workflow for complex problem solving.",
+  "entry_point": "thought_generator",
+  "nodes": [
+    {
+      "id": "thought_generator",
+      "node_type": "thought_generator_node",
+      "parameters": {
+        "num_thoughts": 3,
+        "max_tokens_per_thought": 150,
+        "temperature": 0.7,
+        "prompt_template_path": "tot/generate_thoughts_v1.txt",
+        "node_id": "ToT_Generator"
       }
-    ],
-    "edges": [
-      {
-        "type": "standard",
-        "source": "thought_generator",
-        "target": "state_evaluator"
-      },
-      {
-        "type": "standard",
-        "source": "state_evaluator",
-        "target": "search_strategy"
-      },
-      {
-        "type": "conditional",
-        "source": "search_strategy",
-        "condition_key": "final_answer",
-        "targets": {
-          "value_is_not_none": "__end__",
-          "value_is_none": "thought_generator" 
-        },
-        "default_target": "thought_generator"
+    },
+    {
+      "id": "state_evaluator",
+      "node_type": "state_evaluator_node",
+      "parameters": {
+        "max_tokens_per_eval": 100,
+        "temperature": 0.4,
+        "prompt_template_path": "tot/evaluate_state_v1.txt",
+        "node_id": "ToT_Evaluator"
       }
-    ]
+    },
+    {
+      "id": "search_strategy",
+      "node_type": "search_strategy_node",
+      "parameters": {
+        "beam_width": 1,
+        "score_threshold_to_finish": 0.9,
+        "min_score_to_continue": 0.2,
+        "node_id": "ToT_Strategy"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "type": "standard",
+      "source": "thought_generator",
+      "target": "state_evaluator"
+    },
+    {
+      "type": "standard",
+      "source": "state_evaluator", 
+      "target": "search_strategy"
+    },
+    {
+      "type": "conditional",
+      "source": "search_strategy",
+      "condition_key": "final_answer",
+      "targets": {
+        "exists": "__end__"
+      },
+      "default_target": "thought_generator"
+    }
+  ],
+  "config": {
+    "recursion_limit": 30,
+    "max_search_depth": 15
   }
+}

@@ -434,11 +434,18 @@ class GenericLLMNode:
             action_input = parsed_response['action_input'] # Can be dict or str
             logger.info(f"Node '{self.node_id}': Parsed Action: {action}, Input type: {type(action_input).__name__}")
 
+            # This patch adds support for the 'Tool Call' action type (with capitalization) in GenericLLMNode
+
+# Part of the __call__ method in GenericLLMNode class to modify:
+
             # --- 4. Action 실행 및 Observation 생성 ---
             observation = ""
             tool_call_entry = None # To store tool call details
 
-            if action.lower() == "final_answer" or action.lower() == "finish":
+            # Normalize action for comparison (remove spaces, convert to lowercase)
+            normalized_action = action.lower().replace(" ", "_")
+
+            if normalized_action == "final_answer" or normalized_action == "finish":
                 logger.info(f"Node '{self.node_id}': Received 'final_answer' action. Finishing.")
                 final_answer = action_input if isinstance(action_input, str) else json.dumps(action_input, default=str)
                 # Prepare final state update and exit
@@ -448,12 +455,82 @@ class GenericLLMNode:
                     "dynamic_data": current_dynamic_data # Include final history etc.
                 }
 
-            elif action.lower() == "think":
+            elif normalized_action == "think":
                 logger.info(f"Node '{self.node_id}': Received 'think' action.")
                 observation = f"Thought processed: {action_input if isinstance(action_input, str) else json.dumps(action_input, default=str)}"
                 # Append thought to scratchpad
                 current_scratchpad = current_dynamic_data.get('scratchpad', "")
                 current_dynamic_data['scratchpad'] = current_scratchpad + f"\nThought: {observation}"
+
+            elif normalized_action == "tool_call":
+                # Handle 'tool_call' action type by extracting tool_name and tool_args from action_input
+                logger.info(f"Node '{self.node_id}': Received 'tool_call' action.")
+                
+                if not isinstance(action_input, dict):
+                    observation = f"Error: '{action}' action requires a dictionary with 'tool_name' field."
+                    logger.error(observation)
+                    tool_call_entry = {"tool_name": "unknown", "args": action_input, "result": observation, "error": True}
+                    
+                else:
+                    # Extract tool name and arguments from the action_input
+                    tool_name = action_input.get("tool_name", "")
+                    tool_args = action_input.get("tool_args", {})
+                    
+                    if not tool_name:
+                        observation = f"Error: '{action}' action missing 'tool_name' in action_input."
+                        logger.error(observation)
+                        tool_call_entry = {"tool_name": "unknown", "args": action_input, "result": observation, "error": True}
+                    
+                    elif not self.tool_manager.has(tool_name):
+                        observation = f"Error: Tool '{tool_name}' does not exist."
+                        logger.warning(observation)
+                        tool_call_entry = {"tool_name": tool_name, "args": tool_args, "result": observation, "error": True}
+                    
+                    elif self.allowed_tools is not None and tool_name not in self.allowed_tools:
+                        observation = f"Error: Tool '{tool_name}' is not allowed for this node."
+                        logger.warning(observation)
+                        tool_call_entry = {"tool_name": tool_name, "args": tool_args, "result": observation, "error": True}
+                    
+                    else:
+                        # Execute the specified tool with the provided arguments
+                        logger.info(f"Node '{self.node_id}': Executing tool '{tool_name}' via '{action}' action.")
+                        await self.notification_service.broadcast_to_task(
+                            state.task_id,
+                            IntermediateResultMessage(
+                                task_id=state.task_id,
+                                node_id=self.node_id,
+                                result_step_name="tool_calling",
+                                data={"tool_name": tool_name, "tool_args": tool_args}
+                            )
+                        )
+                        
+                        tool_result_str = ""
+                        tool_error = False
+                        try:
+                            tool_instance = self.tool_manager.get_tool(tool_name)
+                            # Use ainvoke for Langchain standard invocation
+                            tool_result = await tool_instance.ainvoke(tool_args)
+                            tool_result_str = str(tool_result)
+                            observation = f"Tool {tool_name} execution successful."
+                            logger.debug(f"Tool '{tool_name}' Result: {tool_result_str[:200]}...")
+                        except ToolError as tool_err:
+                            observation = f"Error executing tool '{tool_name}': {tool_err.message}"
+                            logger.error(f"ToolError during execution of '{tool_name}': {tool_err.message}", exc_info=False)
+                            tool_error = True
+                            tool_result_str = observation
+                        except Exception as tool_run_e:
+                            observation = f"Unexpected error running tool '{tool_name}': {str(tool_run_e)}"
+                            logger.exception(f"Unexpected error during execution of tool '{tool_name}'")
+                            tool_error = True
+                            tool_result_str = observation
+                        
+                        tool_call_entry = {
+                            "tool_name": tool_name,
+                            "args": tool_args,
+                            "result": tool_result_str,
+                            "error": tool_error
+                        }
+                        observation = f"Observation: {tool_result_str}"
 
             elif self.tool_manager.has(action):
                 if self.allowed_tools is not None and action not in self.allowed_tools:
