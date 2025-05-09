@@ -3,25 +3,22 @@ import json
 import pytest
 import asyncio
 import io
+import time
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 from unittest.mock import patch, AsyncMock, MagicMock, ANY # 비동기 및 일반 모킹 도구
 
+from fastapi import status, WebSocketDisconnect # WebSocketDisconnect 추가
 from fastapi.testclient import TestClient
-from fastapi import status
-from pathlib import Path
 
-# --- 테스트 대상 FastAPI 앱 임포트 ---
-# main.py 또는 app.py 에서 정의된 FastAPI app 객체를 가져옵니다.
-# 프로젝트 구조에 따라 경로 조정이 필요할 수 있습니다.
-try:
-    from src.api.app import app # src/api/app.py 에서 app 객체를 가져온다고 가정
-except ImportError as e:
-    # 경로 문제 발생 시 대체 경로 시도 또는 오류 발생
-    raise ImportError(f"Could not import FastAPI app instance. Check path and structure: {e}")
-
-# --- 필요한 스키마 임포트 ---
+from src.api.app import app # FastAPI 앱 인스턴스
 from src.schemas.request_models import RunWorkflowRequest
 from src.schemas.response_models import TaskSubmittedResponse, WorkflowStatusResponse, GraphInfo, ToolInfo
-from src.schemas.mcp_models import AgentGraphState # 상태 객체 모킹에 사용될 수 있음
+from src.schemas.websocket_models import WebSocketMessageBase # WebSocket 메시지 모델
+from src.schemas.mcp_models import AgentGraphState
+from src.memory.memory_manager import MemoryManager # 타입 힌팅 및 모킹용
+from src.agents.orchestrator import Orchestrator # 타입 힌팅 및 모킹용
+
 
 # --- 테스트 픽스처 ---
 # TestClient 인스턴스를 생성하는 pytest 픽스처
@@ -32,6 +29,14 @@ def client() -> TestClient:
     # lifespan 이벤트를 테스트에서 실행하려면 추가 설정이 필요할 수 있으나,
     # 여기서는 기본 TestClient를 사용합니다.
     return TestClient(app)
+
+@pytest.fixture
+def mock_memory_manager():
+    return MagicMock(spec=MemoryManager)
+
+@pytest.fixture
+def mock_orchestrator():
+    return MagicMock(spec=Orchestrator)
 
 # --- 테스트 케이스 ---
 
@@ -309,3 +314,64 @@ async def test_list_tools_manager_error(client: TestClient):
     assert "Failed to retrieve the list of available tools" in response.json()["detail"]
 
     app.dependency_overrides = {}
+    
+# --- WebSocket 테스트 함수들 ---
+
+@pytest.mark.asyncio
+async def test_websocket_connection_success(async_test_client: TestClient):
+    """WebSocket 엔드포인트에 성공적으로 연결하고 해제할 수 있는지 테스트합니다."""
+    task_id = "ws_connect_test_task"
+    try:
+        with async_test_client.websocket_connect(f"/api/v1/ws/status/{task_id}") as websocket:
+            assert websocket is not None
+            await asyncio.sleep(0.1) # 연결이 완전히 수립될 시간 확보
+    except Exception as e:
+        pytest.fail(f"WebSocket connection failed unexpectedly: {e}")
+
+@pytest.mark.asyncio
+async def test_websocket_receive_status_updates(
+    async_test_client: TestClient,
+    mock_memory_manager: MagicMock,
+):
+    """
+    WebSocket이 워크플로 상태/결과를 정상 수신하는지 검증한다.
+    - 서버가 생성한 task_id를 받아서 즉시 같은 ID로 WebSocket에 구독한다.
+    """
+    # 1) 워크플로 실행 – 서버가 task_id 생성
+    run_req = RunWorkflowRequest(
+        graph_config_name="test_workflow_for_ws",
+        original_input="Test input for WS",
+    )
+    run_resp = await async_test_client.post(
+        "/api/v1/run",
+        json=run_req.model_dump(),
+    )
+    assert run_resp.status_code == status.HTTP_202_ACCEPTED
+    task_id = run_resp.json()["task_id"]
+    assert task_id  # 비어 있지 않아야 함
+
+    # 2) WebSocket 연결
+    async with async_test_client.websocket_connect(f"/api/v1/ws/status/{task_id}") as ws:
+        # 3) 최소 한 개 이상의 상태 메시지를 10초 안에 받아야 한다.
+        msg = await asyncio.wait_for(ws.receive_json(), timeout=10)
+        assert msg["event_type"] in {"status_update", "final_result"}
+
+# --- (선택 사항) 추가 테스트 케이스 ---
+
+# @pytest.mark.asyncio
+# async def test_websocket_invalid_task_id(client: TestClient):
+#     """존재하지 않는 task_id로 연결 시도 시 동작 테스트"""
+#     task_id = "invalid-task-id"
+#     try:
+#         # 연결은 성공할 수 있으나, 아무 메시지도 받지 못해야 함
+#         with client.websocket_connect(f"/api/v1/ws/status/{task_id}") as websocket:
+#             try:
+#                 # 짧은 시간 동안 메시지 수신 시도
+#                 message = await asyncio.wait_for(websocket.receive_json(), timeout=1.0)
+#                 pytest.fail(f"Received unexpected message for invalid task_id: {message}")
+#             except asyncio.TimeoutError:
+#                 # 메시지를 받지 못하는 것이 정상
+#                 pass
+#     except Exception as e:
+#         # 연결 자체 실패 등 예상치 못한 오류 검사
+#         pytest.fail(f"WebSocket test for invalid task_id failed: {e}")

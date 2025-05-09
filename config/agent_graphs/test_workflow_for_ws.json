@@ -1,0 +1,21 @@
+{
+  "name": "test_workflow_for_ws",
+  "description": "dummy graph for WS test",
+  "entry_point": "echo",
+  "nodes": [
+    {
+      "id": "echo",
+      "node_type": "generic_llm_node",
+      "parameters": {
+        "prompt_template_path": "dummy_prompt.txt"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "source": "echo",
+      "target": "__end__",
+      "type": "standard"
+    }
+  ]
+}

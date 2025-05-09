@@ -54,7 +54,7 @@ def initial_agent_graph_state():
 
 # --- GenericLLMNode 테스트 ---
 @pytest.mark.asyncio
-async def test_generic_llm_node_execution_success(mock_llm_client, mock_tool_manager, mock_memory_manager, initial_agent_graph_state):
+async def test_generic_llm_node_execution_success(mock_llm_client, mock_tool_manager, mock_memory_manager, mock_notification_service,initial_agent_graph_state):
     """GenericLLMNode가 성공적으로 실행되고 상태를 업데이트하는지 테스트합니다."""
     prompt_content = "User: {original_input} AI:"
     # Patch 'open' to mock file reading
@@ -67,6 +67,7 @@ async def test_generic_llm_node_execution_success(mock_llm_client, mock_tool_man
                     llm_client=mock_llm_client,
                     tool_manager=mock_tool_manager,
                     memory_manager=mock_memory_manager,
+                    notification_service=mock_notification_service,
                     prompt_template_path="test_prompt.txt", # 경로는 실제 로직에 맞게
                     output_field_name="dynamic_data.llm_result",
                     input_keys_for_prompt=["original_input"],
@@ -92,7 +93,7 @@ async def test_generic_llm_node_execution_success(mock_llm_client, mock_tool_man
                 assert output_state_update.get("error_message") is None
 
 @pytest.mark.asyncio
-async def test_generic_llm_node_llm_failure(mock_llm_client, mock_tool_manager, mock_memory_manager, initial_agent_graph_state):
+async def test_generic_llm_node_llm_failure(mock_llm_client, mock_tool_manager, mock_memory_manager, mock_notification_service, initial_agent_graph_state):
     """GenericLLMNode가 LLM 호출 실패 시 에러 메시지를 상태에 기록하는지 테스트합니다."""
     prompt_content = "Prompt: {original_input}"
     with patch("builtins.open", mock_open(read_data=prompt_content)):
@@ -102,6 +103,7 @@ async def test_generic_llm_node_llm_failure(mock_llm_client, mock_tool_manager, 
                     llm_client=mock_llm_client,
                     tool_manager=mock_tool_manager,
                     memory_manager=mock_memory_manager,
+                    notification_service=mock_notification_service,
                     prompt_template_path="fail_prompt.txt",
                     output_field_name="dynamic_data.llm_result",
                     input_keys_for_prompt=["original_input"],
@@ -118,10 +120,11 @@ async def test_generic_llm_node_llm_failure(mock_llm_client, mock_tool_manager, 
 
 # --- ThoughtGeneratorNode 테스트 ---
 @pytest.mark.asyncio
-async def test_thought_generator_node_generates_thoughts(mock_llm_client, initial_agent_graph_state):
+async def test_thought_generator_node_generates_thoughts(mock_llm_client, mock_notification_service, initial_agent_graph_state):
     """ThoughtGeneratorNode가 여러 생각을 생성하고 상태를 업데이트하는지 테스트합니다."""
     node = ThoughtGeneratorNode(
         llm_client=mock_llm_client,
+        notification_service=mock_notification_service,
         num_thoughts=2,
         node_id="test_thought_gen"
     )
@@ -149,12 +152,12 @@ async def test_thought_generator_node_generates_thoughts(mock_llm_client, initia
     assert output_state_update.get("error_message") is None
 
 @pytest.mark.asyncio
-async def test_thought_generator_node_max_depth_reached(mock_llm_client, initial_agent_graph_state):
+async def test_thought_generator_node_max_depth_reached(mock_llm_client, mock_notification_service, initial_agent_graph_state):
     """ThoughtGeneratorNode가 최대 탐색 깊이에 도달하면 생각 생성을 중단하는지 테스트합니다."""
     initial_agent_graph_state.search_depth = 5
     initial_agent_graph_state.max_search_depth = 5
     
-    node = ThoughtGeneratorNode(llm_client=mock_llm_client, num_thoughts=3)
+    node = ThoughtGeneratorNode(llm_client=mock_llm_client, notification_service=mock_notification_service, num_thoughts=3)
     output_state_update = await node(initial_agent_graph_state)
 
     assert not mock_llm_client.generate_response.called # LLM 호출 안됨
@@ -164,9 +167,9 @@ async def test_thought_generator_node_max_depth_reached(mock_llm_client, initial
 
 # --- StateEvaluatorNode 테스트 ---
 @pytest.mark.asyncio
-async def test_state_evaluator_node_evaluates_thoughts(mock_llm_client, initial_agent_graph_state):
+async def test_state_evaluator_node_evaluates_thoughts(mock_llm_client, mock_notification_service, initial_agent_graph_state):
     """StateEvaluatorNode가 생각들을 평가하고 점수를 업데이트하는지 테스트합니다."""
-    node = StateEvaluatorNode(llm_client=mock_llm_client, node_id="test_evaluator")
+    node = StateEvaluatorNode(llm_client=mock_llm_client, notification_service=mock_notification_service, node_id="test_evaluator")
 
     # 평가할 생각들을 상태에 추가
     thought1 = initial_agent_graph_state.add_thought("Thought content 1")
@@ -190,20 +193,21 @@ async def test_state_evaluator_node_evaluates_thoughts(mock_llm_client, initial_
 
     assert evaluated_thought1.evaluation_score == 0.8
     assert evaluated_thought1.status == "evaluated"
-    assert "Good idea" in evaluated_thought1.metadata.get("eval_reasoning", "").lower()
+    assert "good idea" in evaluated_thought1.metadata.get("eval_reasoning", "").lower()
 
     assert evaluated_thought2.evaluation_score == 0.4
     assert evaluated_thought2.status == "evaluated"
-    assert "Less promising" in evaluated_thought2.metadata.get("eval_reasoning", "").lower()
+    assert "less promising" in evaluated_thought2.metadata.get("eval_reasoning", "").lower()
     
+    assert mock_notification_service.broadcast_to_task.await_count >= 1
     assert output_state_update.get("error_message") is None
 
 
 # --- SearchStrategyNode 테스트 ---
 @pytest.mark.asyncio
-async def test_search_strategy_node_selects_best_and_continues(initial_agent_graph_state):
+async def test_search_strategy_node_selects_best_and_continues(mock_notification_service, initial_agent_graph_state):
     """SearchStrategyNode가 최상의 생각을 선택하고 탐색을 계속하는지 테스트합니다."""
-    node = SearchStrategyNode(beam_width=1, score_threshold_to_finish=0.95, node_id="test_search_strat")
+    node = SearchStrategyNode(notification_service=mock_notification_service,beam_width=1, score_threshold_to_finish=0.95, node_id="test_search_strat")
 
     # 평가된 생각들을 상태에 추가
     t1 = Thought(id="t1", content="High score thought", evaluation_score=0.9, status="evaluated")
@@ -222,9 +226,9 @@ async def test_search_strategy_node_selects_best_and_continues(initial_agent_gra
     assert output_state_update.get("error_message") is None
 
 @pytest.mark.asyncio
-async def test_search_strategy_node_reaches_max_depth(initial_agent_graph_state):
+async def test_search_strategy_node_reaches_max_depth(mock_notification_service, initial_agent_graph_state):
     """SearchStrategyNode가 최대 깊이에 도달하면 종료하는지 테스트합니다."""
-    node = SearchStrategyNode(node_id="test_max_depth_strat")
+    node = SearchStrategyNode(notification_service=mock_notification_service, node_id="test_max_depth_strat")
 
     t1 = Thought(id="t1", content="Final thought at max depth", evaluation_score=0.8, status="evaluated")
     initial_agent_graph_state.thoughts = [t1]
@@ -239,9 +243,9 @@ async def test_search_strategy_node_reaches_max_depth(initial_agent_graph_state)
     assert "Max search depth reached" in output_state_update.get("error_message", "") # 또는 None일 수 있음 (final_answer가 설정되면 성공 간주)
 
 @pytest.mark.asyncio
-async def test_search_strategy_node_high_score_finish(initial_agent_graph_state):
+async def test_search_strategy_node_high_score_finish(mock_notification_service, initial_agent_graph_state):
     """SearchStrategyNode가 높은 점수로 조기 종료하는지 테스트합니다."""
-    node = SearchStrategyNode(score_threshold_to_finish=0.9, node_id="test_high_score_finish")
+    node = SearchStrategyNode(notification_service=mock_notification_service, score_threshold_to_finish=0.9, node_id="test_high_score_finish")
 
     t1 = Thought(id="t1", content="Excellent thought", evaluation_score=0.95, status="evaluated")
     initial_agent_graph_state.thoughts = [t1]

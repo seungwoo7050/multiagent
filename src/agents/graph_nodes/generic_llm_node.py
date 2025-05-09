@@ -16,6 +16,9 @@ from src.services.llm_client import LLMClient
 from src.services.tool_manager import ToolManager
 from src.memory.memory_manager import MemoryManager
 from src.schemas.mcp_models import AgentGraphState, ConversationTurn
+from src.services.notification_service import NotificationService # 추가
+from src.schemas.websocket_models import StatusUpdateMessage, IntermediateResultMessage # 추가
+
 
 _bt.os = os
 logger = get_logger(__name__)
@@ -36,6 +39,7 @@ class GenericLLMNode:
         llm_client: LLMClient,
         tool_manager: ToolManager,
         memory_manager: MemoryManager, # <--- memory_manager 추가
+        notification_service: NotificationService,
         prompt_template_path: str,
         output_field_name: Optional[str] = None,
         input_keys_for_prompt: Optional[List[str]] = None,
@@ -53,6 +57,7 @@ class GenericLLMNode:
         self.llm_client = llm_client
         self.tool_manager = tool_manager
         self.memory_manager = memory_manager # <--- memory_manager 인스턴스 저장
+        self.notification_service = notification_service
         self.prompt_template_path = prompt_template_path
         self.output_field_name = output_field_name
         self.input_keys_for_prompt = input_keys_for_prompt or []
@@ -82,7 +87,9 @@ class GenericLLMNode:
         logger.info(
             f"GenericLLMNode '{self.node_id}' initialized. Tool use: {self.enable_tool_use}. "
             f"History key: '{self.history_prompt_key}', Max items: {self.max_history_items}. Prompt: {prompt_template_path}"
+            f"NotificationService injected: {'Yes' if notification_service else 'No'}"
         )
+
 
 
     def _load_prompt_template(self) -> str:
@@ -265,9 +272,16 @@ class GenericLLMNode:
 
     async def __call__(self, state: AgentGraphState, config: Optional[RunnableConfig] = None) -> Dict[str, Any]: # <--- 이미 async
         logger.info(f"GenericLLMNode '{self.node_id}' execution started. Tool use enabled: {self.enable_tool_use}")
+        
+        await self.notification_service.broadcast_to_task(
+            state.task_id,
+            StatusUpdateMessage(task_id=state.task_id, status="node_executing", detail=f"Node '{self.node_id}' started.", current_node=self.node_id)
+        )
 
         if not self.enable_tool_use:
             logger.debug(f"Node '{self.node_id}': Executing simple LLM call (tool use disabled).")
+            update_dict: Dict[str, Any] = {}
+            final_error_message_for_ws: Optional[str] = None
             try:
                 prompt_input_values = await self._prepare_prompt_input(state) # <--- await 추가
                 formatted_prompt = self.prompt_template.format(**prompt_input_values)
@@ -311,12 +325,25 @@ class GenericLLMNode:
                 else:
                      update_dict[output_key] = llm_response_str
 
-
-                return update_dict
-
             except Exception as e:
                 logger.error(f"Node '{self.node_id}': Error during simple LLM call: {e}", exc_info=True)
-                return {"error_message": f"Error in node '{self.node_id}' (tools disabled): {e}"}
+                final_error_message_for_ws = f"Error in node '{self.node_id}' (tools disabled): {e}" # WS용 에러 메시지 설정
+                update_dict = {"error_message": final_error_message_for_ws}
+                
+            await self.notification_service.broadcast_to_task(
+                state.task_id,
+                StatusUpdateMessage(
+                    task_id=state.task_id, status="node_completed",
+                    detail=f"Node '{self.node_id}' (Simple LLM Call) finished. Error: {final_error_message_for_ws or 'None'}",
+                    current_node=self.node_id,
+                    # next_node는 이 경로에서는 보통 __end__ 이거나 그래프 설정에 따름 (여기서는 None으로 둘 수 있음)
+                    next_node=None
+                )
+            )
+
+
+            return update_dict
+
 
         # --- ReAct Loop Logic ---
         logger.debug(f"Node '{self.node_id}': Executing ReAct loop (tool use enabled).")
@@ -329,6 +356,10 @@ class GenericLLMNode:
 
         for i in range(self.max_react_iterations):
             logger.info(f"Node '{self.node_id}': ReAct Iteration {i + 1}/{self.max_react_iterations}")
+            await self.notification_service.broadcast_to_task(
+                state.task_id,
+                StatusUpdateMessage(task_id=state.task_id, status="node_iterating", detail=f"Node '{self.node_id}' iteration {i+1}.", current_node=self.node_id)
+            )
 
             # Create a temporary state representation for prompt preparation for this iteration
             temp_state_for_prompt = AgentGraphState(
@@ -380,6 +411,11 @@ class GenericLLMNode:
             if parsed_response is None:
                 logger.error(f"Node '{self.node_id}': Failed to parse LLM response. Response: {llm_response_str[:500]}...")
                 current_error_message = f"Failed to parse LLM response in node '{self.node_id}'."
+                await self.notification_service.broadcast_to_task(
+                    state.task_id,
+                    StatusUpdateMessage(task_id=state.task_id, status="node_error", detail=f"Node '{self.node_id}' failed to parse LLM response.", current_node=self.node_id)
+                )
+
                 break
 
             action = parsed_response['action']
@@ -414,6 +450,16 @@ class GenericLLMNode:
                     tool_call_entry = {"tool_name": action, "args": action_input, "result": observation, "error": True}
                 else:
                     logger.info(f"Node '{self.node_id}': Executing tool '{action}'.")
+                    await self.notification_service.broadcast_to_task(
+                        state.task_id,
+                        IntermediateResultMessage(
+                            task_id=state.task_id,
+                            node_id=self.node_id,
+                            result_step_name="tool_calling",
+                            data={"tool_name": action, "tool_args": action_input if isinstance(action_input, dict) else {"input": action_input}}
+                        )
+                    )
+
                     tool_args = action_input if isinstance(action_input, dict) else {}
                     tool_result_str = ""
                     tool_error = False
@@ -455,6 +501,16 @@ class GenericLLMNode:
             current_dynamic_data['scratchpad'] = current_scratchpad + f"\n{observation}"
             # Append tool call entry if one was made
             if tool_call_entry:
+                await self.notification_service.broadcast_to_task(
+                    state.task_id,
+                    IntermediateResultMessage(
+                        task_id=state.task_id,
+                        node_id=self.node_id,
+                        result_step_name="tool_result",
+                        data=tool_call_entry # tool_name, args, result, error 포함
+                    )
+                )
+
                 current_dynamic_data['tool_call_history'].append(tool_call_entry)
 
             # !! crucial: DO NOT modify the input 'state' object directly !!
@@ -494,4 +550,8 @@ class GenericLLMNode:
                  final_state_update["final_answer"] = final_output_value
              # Otherwise, the output is in dynamic_data or handled by error_message
 
+        await self.notification_service.broadcast_to_task(
+            state.task_id,
+            StatusUpdateMessage(task_id=state.task_id, status="node_completed", detail=f"Node '{self.node_id}' finished. Error: {current_error_message or 'None'}", current_node=self.node_id)
+        )
         return final_state_update

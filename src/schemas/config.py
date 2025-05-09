@@ -81,6 +81,9 @@ class AppSettings(BaseSettings):
     API_PREFIX: str = '/api/v1'
     CORS_ORIGINS: List[str] = ['*']
 
+    WEBSOCKET_KEEP_ALIVE_INTERVAL: int = Field(60, description="WebSocket 연결 유지를 위한 서버 측 sleep 간격(초)")
+
+
     # Metrics Config
     METRICS_ENABLED: bool = True
     METRICS_PORT: int = 9090

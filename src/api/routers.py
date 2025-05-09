@@ -11,7 +11,9 @@ from fastapi import (
     HTTPException,
     status,
     Path,
-    BackgroundTasks
+    BackgroundTasks,
+    WebSocket,
+    WebSocketDisconnect,
 )
 
 from src.config.logger import get_logger
@@ -29,7 +31,8 @@ from src.schemas.response_models import (
 from src.api.dependencies import (
     NewOrchestratorDep,
     MemoryManagerDep,
-    ToolManagerDep
+    ToolManagerDep,
+    NotificationServiceDep,
 )
 # 핵심 클래스 임포트
 from src.agents.orchestrator import Orchestrator as NewOrchestrator
@@ -353,3 +356,59 @@ async def list_available_tools(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to retrieve the list of available tools."
         )
+        
+# --- WebSocket 엔드포인트 정의 ---
+@router.websocket("/ws/status/{task_id}")
+async def websocket_status_endpoint(
+    websocket: WebSocket,
+    notification_service: NotificationServiceDep,
+    task_id: str = Path(..., description="상태 업데이트를 수신할 작업의 ID"),
+):
+    """
+    특정 task_id에 대한 실시간 상태 업데이트를 위한 WebSocket 엔드포인트입니다.
+    클라이언트는 이 엔드포인트에 연결하여 작업 진행 상황을 실시간으로 받을 수 있습니다.
+    """
+    await websocket.accept()
+    logger.info(f"WebSocket client {websocket.client} connected for task_id: {task_id}")
+    await notification_service.subscribe(task_id, websocket)
+
+    try:
+        # 연결 유지 루프
+        # 이 루프는 클라이언트로부터 메시지를 기다리거나,
+        # 주기적으로 ping을 보내는 등의 용도로 사용될 수 있습니다.
+        # 현재는 NotificationService가 메시지를 푸시하므로, 여기서는 연결만 유지합니다.
+        while True:
+            # 클라이언트로부터 메시지를 받을 필요가 있다면 아래와 같이 처리:
+            # try:
+            #     data = await asyncio.wait_for(websocket.receive_text(), timeout=60) # 타임아웃 설정 가능
+            #     logger.debug(f"Received message from client for task {task_id}: {data}")
+            #     # (선택) 클라이언트 메시지 처리 로직 (예: 'ping'에 'pong' 응답)
+            #     if data.lower() == "ping":
+            #         await websocket.send_text("pong")
+            # except asyncio.TimeoutError:
+            #     # 타임아웃 시 ping 전송하여 연결 확인
+            #     try:
+            #         await websocket.send_text("ping_from_server") # 또는 WebSocket PING 프레임 사용
+            #     except Exception:
+            #         logger.warning(f"Failed to send ping to client for task {task_id}, connection might be lost.")
+            #         break # 연결 문제로 간주하고 루프 종료
+            # except WebSocketDisconnect: # 이 예외는 루프 밖에서 처리
+            #     raise
+            # except Exception as recv_err:
+            #     logger.error(f"Error receiving message from client for task {task_id}: {recv_err}")
+            #     break # 알 수 없는 오류 시 루프 종료
+
+            # 현재 구현에서는 서버가 일방적으로 푸시하므로,
+            # 클라이언트 메시지를 기다리지 않고 단순히 연결을 유지하도록 sleep.
+            # 또는 FastAPI의 WebSocketResponse를 사용하여 백그라운드에서 메시지 수신 처리도 가능.
+            await asyncio.sleep(settings.WEBSOCKET_KEEP_ALIVE_INTERVAL if hasattr(settings, 'WEBSOCKET_KEEP_ALIVE_INTERVAL') else 60) # 설정 파일에 추가 가능
+
+    except WebSocketDisconnect:
+        logger.info(f"WebSocket client {websocket.client} disconnected for task_id: {task_id}")
+    except Exception as e:
+        # 예상치 못한 오류 발생 시 (예: sleep 중 문제)
+        logger.error(f"Unexpected error in WebSocket connection for task_id {task_id}: {e}", exc_info=True)
+    finally:
+        # 연결 종료 시 항상 구독 해제
+        await notification_service.unsubscribe(task_id, websocket)
+        logger.info(f"WebSocket connection closed and unsubscribed for task_id: {task_id}, client: {websocket.client}")

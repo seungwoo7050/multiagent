@@ -44,9 +44,9 @@ def mock_memory_manager():
     return MagicMock(spec=MemoryManager)
 
 @pytest.fixture
-def orchestrator_instance(mock_llm_client_for_orchestrator, mock_tool_manager, mock_memory_manager):
+def orchestrator_instance(mock_llm_client_for_orchestrator, mock_tool_manager, mock_memory_manager, mock_notification_service):
     """테스트용 Orchestrator 인스턴스를 생성합니다."""
-    return Orchestrator(llm_client=mock_llm_client_for_orchestrator, tool_manager=mock_tool_manager, memory_manager=mock_memory_manager)
+    return Orchestrator(llm_client=mock_llm_client_for_orchestrator, tool_manager=mock_tool_manager, memory_manager=mock_memory_manager, notification_service=mock_notification_service)
 
 @pytest.fixture
 def simple_graph_config_content():
@@ -229,19 +229,31 @@ async def test_orchestrator_run_tot_workflow_mocked_llm(orchestrator_instance, t
     setattr(mock_settings_object, 'PROMPT_TEMPLATE_DIR', str(tmp_path / "prompts"))
 
     # 중요: CasePreservingStr 클래스를 표준 str로 패치하는 부분
-    with patch("src.agents.graph_nodes.state_evaluator_node.CasePreservingStr", str):
         # json.dumps의 default 파라미터를 설정하여 직렬화 안전하게 처리
-        with patch("src.utils.serialization.serialize_to_json", lambda data, **kwargs: json.dumps(data, default=str)):
-            with patch("src.agents.orchestrator.settings", mock_settings_object):
-                final_state = await orchestrator_instance.run_workflow(
-                    graph_config_name="default_tot_workflow",
-                    task_id="task_tot_123",
-                    original_input="Solve a complex problem.",
-                    max_iterations=5
-                )
+    with patch("src.agents.orchestrator.settings", mock_settings_object), \
+         patch("src.agents.graph_nodes.generic_llm_node.settings", mock_settings_object), \
+         patch("src.agents.graph_nodes.thought_generator_node.settings", mock_settings_object), \
+         patch("src.agents.graph_nodes.state_evaluator_node.settings", mock_settings_object), \
+         patch("src.agents.graph_nodes.search_strategy_node.settings", mock_settings_object):
 
-    # 검증 로직
-    assert final_state.task_id == "task_tot_123"
-    assert final_state.error_message is None, f"Workflow errored: {final_state.error_message}"
-    assert final_state.final_answer is not None, "Final answer should be set"
-    assert orchestrator_instance.llm_client.generate_response.call_count >= 2
+        task_id = "task_tot_mock_123"
+        final_state = await orchestrator_instance.run_workflow(
+            graph_config_name="default_tot_workflow",
+            task_id=task_id,
+            original_input="Solve complex problem X"
+        )
+
+        # 검증 로직
+        assert final_state.task_id == task_id
+
+        assert final_state.error_message is None, f"Workflow errored: {final_state.error_message}"
+        assert final_state.final_answer is not None, "Final answer should be set"
+        assert orchestrator_instance.llm_client.generate_response.call_count >= 2
+        assert final_state is not None
+        assert final_state.final_answer is not None
+        assert "Score:" in final_state.final_answer
+        assert "Reasoning:" in final_state.final_answer
+        final_thought = final_state.get_thought_by_id(final_state.current_best_thought_id)
+        assert final_thought is not None
+        assert "Score:" in final_thought.content
+        assert "Reasoning:" in final_thought.content

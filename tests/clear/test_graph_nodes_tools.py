@@ -82,7 +82,7 @@ Instructions: Think -> Act -> Observation. Output JSON {{"action": "...", "actio
 # --- GenericLLMNode 도구 호출 테스트 (테스트 함수 본문은 동일) ---
 
 @pytest.mark.asyncio
-async def test_generic_llm_node_tool_use_disabled(mock_llm_client, mock_tool_manager_with_tools, mock_memory_manager, basic_agent_state):
+async def test_generic_llm_node_tool_use_disabled(mock_llm_client, mock_tool_manager_with_tools, mock_memory_manager, mock_notification_service, basic_agent_state):
     # ... (기존 테스트 함수 본문 유지) ...
     prompt_content = "Input: {original_input}"
     m = mock_open(read_data=prompt_content)
@@ -93,6 +93,7 @@ async def test_generic_llm_node_tool_use_disabled(mock_llm_client, mock_tool_man
         node = GenericLLMNode(
             llm_client=mock_llm_client,
             tool_manager=mock_tool_manager_with_tools,
+            notification_service=mock_notification_service,
             prompt_template_path="simple_prompt.txt",
             output_field_name="final_answer",
             input_keys_for_prompt=["original_input"],
@@ -109,7 +110,7 @@ async def test_generic_llm_node_tool_use_disabled(mock_llm_client, mock_tool_man
         assert result_update.get("final_answer") == "Simple answer without tools"
 
 @pytest.mark.asyncio
-async def test_generic_llm_node_single_tool_call_success(mock_llm_client, mock_tool_manager_with_tools, mock_memory_manager, basic_agent_state, react_prompt_content):
+async def test_generic_llm_node_single_tool_call_success(mock_llm_client, mock_tool_manager_with_tools, mock_memory_manager, mock_notification_service, basic_agent_state, react_prompt_content):
     # ... (기존 테스트 함수 본문 유지) ...
     m = mock_open(read_data=react_prompt_content)
     with patch("builtins.open", m), \
@@ -119,13 +120,14 @@ async def test_generic_llm_node_single_tool_call_success(mock_llm_client, mock_t
         node = GenericLLMNode(
             llm_client=mock_llm_client,
             tool_manager=mock_tool_manager_with_tools, # 실제 ToolManager 전달
+            memory_manager=mock_memory_manager,
+            notification_service=mock_notification_service,
             prompt_template_path="react_prompt.txt",
             output_field_name="final_answer",
             input_keys_for_prompt=["original_input", "scratchpad", "tool_call_history", "available_tools"],
             node_id="test_single_tool_node",
             enable_tool_use=True,
             allowed_tools=["calculator"],
-            memory_manager=mock_memory_manager
         )
         # --- LLM 응답 시나리오 설정 ---
         llm_response_tool_call = json.dumps({"action": "calculator", "action_input": {"expression": "5 + 7"}})
@@ -149,16 +151,17 @@ async def test_generic_llm_node_single_tool_call_success(mock_llm_client, mock_t
 
 
 @pytest.mark.asyncio
-async def test_generic_llm_node_parse_response_formats(mock_llm_client, mock_tool_manager_with_tools, mock_memory_manager):
+async def test_generic_llm_node_parse_response_formats(mock_llm_client, mock_tool_manager_with_tools, mock_memory_manager, mock_notification_service):
     """LLM 응답 파싱 로직 (JSON, Text) 테스트"""
     with patch.object(GenericLLMNode, '_load_prompt_template', return_value="Dummy template content"):
         node = GenericLLMNode(
             llm_client=mock_llm_client,
             tool_manager=mock_tool_manager_with_tools,
+            memory_manager=mock_memory_manager,
+            notification_service=mock_notification_service,
             prompt_template_path="dummy.txt",
             node_id="test_parser_node",
             enable_tool_use=True,
-            memory_manager=mock_memory_manager
         )
 
     # 1. 정상 JSON 응답 (```json 포함)

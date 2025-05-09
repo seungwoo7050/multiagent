@@ -1,22 +1,34 @@
-# src/api/dependencies.py
-from typing import Annotated, cast
+import asyncio
 
+from typing import Annotated, cast, AsyncGenerator, Optional
 from fastapi import Depends, HTTPException, status
 
 from src.config.logger import get_logger
 from src.config.settings import get_settings
-# MemoryManager 관련 임포트
 from src.memory.memory_manager import MemoryManager, get_memory_manager
-# Orchestrator 및 서비스 관련 임포트
 from src.agents.orchestrator import Orchestrator as NewOrchestrator
 from src.services.llm_client import LLMClient
 from src.services.tool_manager import ToolManager, get_tool_manager
 from src.config.errors import ErrorCode # 오류 코드 임포트 추가
+from src.services.notification_service import NotificationService
 
 settings = get_settings()
 logger = get_logger(__name__)
+_notification_service_instance: Optional[NotificationService] = None
+_notification_service_lock = asyncio.Lock() # NotificationService 싱글톤 관리를 위한 Lock
 
-# --- MemoryManager 의존성 함수 ---
+async def get_notification_service_dependency() -> NotificationService:
+    """Dependency function to get the NotificationService singleton instance."""
+    global _notification_service_instance
+    if _notification_service_instance is None:
+        async with _notification_service_lock:
+            if _notification_service_instance is None: # Double-check locking
+                _notification_service_instance = NotificationService()
+                logger.info("NotificationService singleton instance created.")
+    return _notification_service_instance
+
+NotificationServiceDep = Annotated[NotificationService, Depends(get_notification_service_dependency)]
+
 async def get_memory_manager_dependency() -> MemoryManager:
     """Dependency function to get the MemoryManager instance."""
     try:
@@ -81,20 +93,23 @@ async def get_new_orchestrator_dependency(
     # FastAPI가 각 의존성 함수를 호출하여 인스턴스를 주입
     llm_client: LLMClientDep,
     tool_manager: ToolManagerDep,
-    memory_manager: MemoryManagerDep  # <<< MemoryManager 의존성 추가
+    memory_manager: MemoryManagerDep,  # <<< MemoryManager 의존성 추가
+    notification_service: NotificationServiceDep,  # <<< NotificationService 의존성 추가
 ) -> NewOrchestrator:
     """
     Dependency function to get the new Orchestrator instance.
-    Injects LLMClient, ToolManager, and MemoryManager dependencies automatically.
+    Injects LLMClient, ToolManager, MemoryManager, and NotificationService dependencies automatically.
     """
-    logger.debug("Resolving New Orchestrator dependency with LLMClient, ToolManager, and MemoryManager...")
+    logger.debug("Resolving New Orchestrator dependency with LLMClient, ToolManager, MemoryManager, and NotificationService...")
     try:
         # NewOrchestrator 생성 시 필요한 모든 의존성 전달
         orchestrator = NewOrchestrator(
             llm_client=llm_client,
             tool_manager=tool_manager,
-            memory_manager=memory_manager # <<< MemoryManager 전달
+            memory_manager=memory_manager, # <<< MemoryManager 전달
+            notification_service=notification_service # <<< NotificationService 전달
         )
+
         logger.debug("New Orchestrator instance created successfully.")
         return orchestrator
     except ValueError as ve: # Orchestrator 초기화 시 발생할 수 있는 설정 오류 등

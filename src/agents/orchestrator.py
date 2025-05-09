@@ -1,5 +1,4 @@
 # src/agents/orchestrator.py
-
 import json
 import os
 from pathlib import Path
@@ -9,6 +8,7 @@ import asyncio
 import inspect # inspect 모듈 추가
 import msgspec
 
+from fastapi import HTTPException
 from langgraph.graph import StateGraph, END
 from langgraph.graph.graph import CompiledGraph
 
@@ -18,11 +18,9 @@ from src.services.llm_client import LLMClient
 from src.memory.memory_manager import MemoryManager
 from src.schemas.mcp_models import AgentGraphState
 from src.schemas.agent_graph_config import AgentGraphConfig, NodeConfig as JsonNodeConfig, EdgeConfig, ConditionalEdgeConfig
-
-# ToolManager import 추가
+from src.services.notification_service import NotificationService # NotificationService 임포트
+from src.schemas.websocket_models import StatusUpdateMessage, IntermediateResultMessage, FinalResultMessage # 메시지 모델 임포트
 from src.services.tool_manager import ToolManager, get_tool_manager
-
-# graph_nodes 임포트
 from src.agents.graph_nodes.generic_llm_node import GenericLLMNode
 from src.agents.graph_nodes.thought_generator_node import ThoughtGeneratorNode
 from src.agents.graph_nodes.state_evaluator_node import StateEvaluatorNode
@@ -41,21 +39,22 @@ REGISTERED_NODE_TYPES: Dict[str, Type[Any]] = {
 
 
 class Orchestrator:
-    def __init__(self, llm_client: LLMClient, tool_manager: ToolManager, memory_manager: MemoryManager): # <--- memory_manager 추가
+    def __init__(self, llm_client: LLMClient, tool_manager: ToolManager, memory_manager: MemoryManager, notification_service: NotificationService): # <--- memory_manager 추가
         if not isinstance(llm_client, LLMClient):
              raise TypeError("llm_client must be an instance of LLMClient")
         if not isinstance(tool_manager, ToolManager):
              raise TypeError("tool_manager must be an instance of ToolManager")
         if not isinstance(memory_manager, MemoryManager): # <--- memory_manager 타입 체크 추가
              raise TypeError("memory_manager must be an instance of MemoryManager")
+        if not isinstance(notification_service, NotificationService): # <--- 타입 체크 추가
+            raise TypeError("notification_service must be an instance of NotificationService")
 
         self.llm_client = llm_client
         self.tool_manager = tool_manager
-        self.memory_manager = memory_manager # <--- memory_manager 인스턴스 저장
+        self.memory_manager = memory_manager
+        self.notification_service = notification_service# <--- memory_manager 인스턴스 저장
         self._compiled_graphs: Dict[str, CompiledGraph] = {}
         logger.info(f"Orchestrator initialized with ToolManager: '{self.tool_manager.name}' and MemoryManager.")
-
-
 
     def _load_graph_config_from_file(self, config_name: str) -> Dict[str, Any]:
         config_dir = Path(getattr(settings, 'AGENT_GRAPH_CONFIG_DIR', 'config/agent_graphs'))
@@ -111,6 +110,16 @@ class Orchestrator:
                 if 'memory_manager' in sig_params:
                     constructor_params["memory_manager"] = self.memory_manager # <--- MemoryManager 주입
                     logger.debug(f"Injecting default MemoryManager into node '{node_id}' (type: {node_type_str}).")
+                    
+            # <<< NotificationService 주입 (필요한 노드에만) >>>
+            # 모든 노드에 주입할 수도 있고, 특정 노드 타입에만 주입할 수도 있습니다.
+            # 예를 들어, GenericLLMNode가 도구 호출 시 알림을 보낸다면 주입합니다.
+            # 여기서는 모든 노드 생성 시점에 NotificationService를 전달하도록 수정하고,
+            # 각 노드가 필요에 따라 사용하도록 합니다. (또는 필요한 노드에만 선택적 주입)
+            if 'notification_service' in sig_params and "notification_service" not in node_params:
+                 constructor_params["notification_service"] = self.notification_service
+                 logger.debug(f"Injecting default NotificationService into node '{node_id}' (type: {node_type_str}).")
+            # <<< NotificationService 주입 끝 >>>        
 
             # JSON에서 제공된 파라미터 병합 (기본 주입된 의존성을 덮어쓸 수 있음 - 의도된 경우)
             constructor_params.update(node_params)
@@ -130,7 +139,7 @@ class Orchestrator:
             missing_params = required_params_in_sig - set(valid_params_for_constructor.keys())
             if missing_params:
                  # llm_client, tool_manager, memory_manager 는 기본 주입 시도 대상이므로 제외하고 에러 표시
-                 critical_missing = missing_params - {"llm_client", "tool_manager", "memory_manager"}
+                 critical_missing = missing_params - {"llm_client", "tool_manager", "memory_manager", "notification_service"}
                  if critical_missing:
                       raise TypeError(f"Node '{node_id}' (Type: {node_type_str}): Missing required constructor arguments: {critical_missing}. Check JSON parameters and node class constructor.")
 
@@ -333,16 +342,31 @@ class Orchestrator:
         max_iterations: int = 15
     ) -> AgentGraphState:
         logger.info(f"Running workflow '{graph_config_name}' for task_id '{task_id}'. Max iterations: {max_iterations}")
+        
+        # 워크플로우 시작 알림
+        await self.notification_service.broadcast_to_task(
+            task_id,
+            StatusUpdateMessage(task_id=task_id, status="pending", detail=f"Workflow '{graph_config_name}' starting.")
+        )
+
+
 
         try:
             compiled_graph = self.get_compiled_graph(graph_config_name)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc    
         except Exception as graph_err:
             logger.error(f"Cannot run workflow: Failed to get compiled graph '{graph_config_name}': {graph_err}", exc_info=True)
+            error_detail = f"Failed to load/compile workflow graph '{graph_config_name}': {graph_err}"
+            await self.notification_service.broadcast_to_task(
+                task_id,
+                FinalResultMessage(task_id=task_id, final_answer=None, error_message=error_detail)
+            )
             return AgentGraphState(
                  task_id=task_id,
                  original_input=original_input,
                  metadata=initial_metadata or {},
-                 error_message=f"Failed to load/compile workflow graph '{graph_config_name}': {graph_err}"
+                 error_message=error_detail,
             )
 
         # <<< 로드맵에 따른 초기 상태 로드 (선택적 기능) 시작 >>>
@@ -382,14 +406,23 @@ class Orchestrator:
                 initial_state_dict = decoder.decode(encoder.encode(initial_agent_state_obj))
             except Exception as dump_err:
                 logger.error(f"Failed to convert initial state object to dict for workflow '{graph_config_name}': {dump_err}")
+                error_detail = f"Failed to prepare initial state: {dump_err}"
+                await self.notification_service.broadcast_to_task(
+                    task_id,
+                    FinalResultMessage(task_id=task_id, final_answer=None, error_message=error_detail)
+                )
                 return AgentGraphState(
-                     task_id=task_id,
-                     original_input=original_input,
-                     metadata=initial_metadata or {},
-                     error_message=f"Failed to prepare initial state: {dump_err}"
+                    task_id=task_id, original_input=original_input, metadata=initial_metadata or {}, error_message=error_detail
                 )
 
+
         logger.debug(f"Initial state dict for workflow '{graph_config_name}': {initial_state_dict}")
+        
+        # 실행 중 알림 (Optional: compiled_graph.astream() 사용 시 각 단계별 알림 가능)
+        await self.notification_service.broadcast_to_task(
+            task_id,
+            StatusUpdateMessage(task_id=task_id, status="running", detail="Workflow execution in progress.")
+        )
 
         final_state_dict = None
         try:
@@ -400,6 +433,11 @@ class Orchestrator:
         except Exception as invoke_err:
             logger.error(f"Error invoking graph '{graph_config_name}' for task {task_id}: {invoke_err}", exc_info=True)
             # 실패 시 현재 상태(initial_state_dict에서 변환)를 기반으로 에러 메시지 포함하여 반환
+            error_detail = f"Workflow execution failed: {str(invoke_err)}"
+            await self.notification_service.broadcast_to_task(
+                task_id,
+                FinalResultMessage(task_id=task_id, final_answer=None, error_message=error_detail)
+            )
             try:
                 error_state = msgspec.convert(initial_state_dict, AgentGraphState, strict=False)
                 error_state.error_message = f"Workflow execution failed: {str(invoke_err)}"
@@ -414,65 +452,37 @@ class Orchestrator:
             try:
                 final_state = msgspec.convert(final_state_dict, AgentGraphState, strict=False)
                 logger.info(f"Workflow '{graph_config_name}' for task {task_id} completed. Final Answer: {final_state.final_answer or 'N/A'}")
-                if final_state.error_message:
-                     logger.warning(f"Workflow '{graph_config_name}' completed with error: {final_state.error_message}")
-                return final_state # 최종 상태 반환 (저장은 API 레벨에서)
+                await self.notification_service.broadcast_to_task(
+                    task_id,
+                    FinalResultMessage(task_id=task_id, final_answer=final_state.final_answer, error_message=final_state.error_message, metadata=final_state.metadata)
+                )
+                return final_state
             except Exception as convert_err:
                 logger.error(f"Error converting final state dictionary to AgentGraphState for task {task_id}: {convert_err}", exc_info=True)
                 # 변환 실패 시, dict에서 직접 필요한 정보 추출 시도하여 AgentGraphState 구성
+                error_detail = f"Final state conversion error: {convert_err}. Raw error: {final_state_dict.get('error_message')}"
+                await self.notification_service.broadcast_to_task(
+                    task_id,
+                    FinalResultMessage(task_id=task_id, final_answer=final_state_dict.get("final_answer", "Workflow completed but final state conversion failed."), error_message=error_detail)
+                )
                 return AgentGraphState(
-                    task_id=task_id,
-                    original_input=original_input, # 또는 final_state_dict.get('original_input', original_input)
-                    metadata=final_state_dict.get("metadata", initial_metadata or {}),
+                    task_id=task_id, original_input=original_input, metadata=final_state_dict.get("metadata", initial_metadata or {}),
                     current_iteration=final_state_dict.get("current_iteration", 0),
                     final_answer=final_state_dict.get("final_answer", "Workflow completed but final state conversion failed."),
-                    error_message=f"Final state conversion error: {convert_err}. Raw error: {final_state_dict.get('error_message')}",
-                    # ... AgentGraphState의 다른 필드들도 final_state_dict에서 가져오도록 시도 ...
-                    dynamic_data=final_state_dict.get("dynamic_data", {})
+                    error_message=error_detail, dynamic_data=final_state_dict.get("dynamic_data", {})
                 )
+
         else:
             logger.error(f"Workflow '{graph_config_name}' for task {task_id} invocation returned unexpected type: {type(final_state_dict).__name__} or None.")
-            # 이 경우에도 initial_state_dict를 기반으로 오류 상태 반환 시도
+            error_detail = "Workflow execution finished but returned invalid final state."
+            await self.notification_service.broadcast_to_task(
+                task_id,
+                FinalResultMessage(task_id=task_id, final_answer=None, error_message=error_detail)
+            )
             try:
                 error_state = msgspec.convert(initial_state_dict, AgentGraphState, strict=False)
-                error_state.error_message="Workflow execution finished but returned invalid final state."
+                error_state.error_message = error_detail
                 return error_state
             except Exception as convert_err_on_empty:
                 logger.error(f"Failed to convert initial_state_dict during empty final state handling: {convert_err_on_empty}")
-                return AgentGraphState(
-                    task_id=task_id,
-                    original_input=original_input,
-                    metadata=initial_metadata or {},
-                    error_message="Workflow execution finished but returned invalid final state AND state conversion error."
-                )
-
-
-
-
-        
-"""
-Orchestrator 클래스 설명:
-
-__init__: LLMClient 인스턴스를 주입받고, 컴파일된 LangGraph 그래프를 캐시할 딕셔너리를 초기화합니다.
-REGISTERED_NODE_TYPES: JSON 설정의 node_type 문자열을 실제 노드 클래스로 매핑하는 딕셔너리입니다. 이 맵에 GenericLLMNode와 ToT 노드들을 등록했습니다.
-_load_graph_config_from_file: config/agent_graphs/ 디렉토리에서 JSON 설정 파일을 로드하고 Pydantic 모델(AgentGraphConfig)을 사용하여 유효성을 검사합니다.
-_create_node_instance: NodeConfig (JSON에서 파싱된)를 기반으로 REGISTERED_NODE_TYPES 맵을 사용하여 실제 노드 클래스의 인스턴스를 생성합니다. 이때 llm_client와 node_id, 그리고 JSON 설정의 parameters를 노드 생성자에 전달합니다. 노드 클래스 생성자가 해당 파라미터들을 받을 수 있도록 설계되어야 합니다.
-_get_conditional_router_func: 조건부 엣지를 위한 라우팅 함수를 동적으로 생성합니다. 이 함수는 AgentGraphState를 입력으로 받아 다음 노드의 ID(문자열)를 반환합니다. 상태의 특정 필드 값(condition_key)을 확인하고, targets_map에 따라 다음 목적지를 결정합니다. value_is_not_none / value_is_none과 같은 특수 조건도 처리합니다.
-build_graph: AgentGraphConfig Pydantic 모델을 입력으로 받아 langgraph.graph.StateGraph 인스턴스를 구성합니다.
-AgentGraphState를 상태 스키마로 사용합니다.
-설정의 nodes 목록을 순회하며 각 노드를 그래프에 추가합니다 (workflow.add_node).
-설정의 edges 목록을 순회하며 일반 엣지 (workflow.add_edge) 또는 조건부 엣지 (workflow.add_conditional_edges)를 추가합니다.
-진입점(workflow.set_entry_point)을 설정합니다.
-get_compiled_graph: 그래프 설정 이름(graph_config_name)을 받아, 이미 컴파일된 그래프가 캐시에 있으면 반환하고, 없으면 설정 파일을 로드하여 build_graph로 그래프를 빌드한 후 컴파일하고 캐시에 저장한 뒤 반환합니다.
-run_workflow: 워크플로우 실행의 주 메서드입니다.
-get_compiled_graph를 호출하여 실행할 컴파일된 그래프를 가져옵니다.
-AgentGraphState의 초기 인스턴스를 생성합니다 (task_id, original_input, metadata 등 설정).
-compiled_graph.ainvoke() (또는 astream())를 호출하여 그래프를 실행합니다. recursion_limit을 설정하여 무한 루프를 방지합니다.
-최종 상태를 AgentGraphState 객체로 변환하여 반환합니다.
-참고 사항:
-
-REGISTERED_NODE_TYPES에 실제 노드 클래스들을 정확히 매핑해야 합니다.
-각 노드 클래스(GenericLLMNode, ThoughtGeneratorNode 등)의 __init__ 메서드는 Orchestrator가 전달하는 파라미터들(예: llm_client, node_id 및 JSON 설정의 parameters 내의 값들)을 받을 수 있도록 정의되어야 합니다.
-조건부 엣지의 라우팅 함수(_get_conditional_router_func 내부의 router_function)는 LangGraph의 요구사항에 맞게 상태 객체를 입력으로 받고 다음 노드의 이름(문자열)을 반환해야 합니다. END는 LangGraph에서 그래프 종료를 나타내는 특별한 상수입니다.
-AgentGraphState는 msgspec.Struct이므로 불변(immutable) 객체입니다. LangGraph에서 노드가 상태를 업데이트할 때는 새로운 상태 전체 또는 변경된 부분만 포함된 딕셔너리를 반환해야 합니다. LangGraph가 이 딕셔너리를 기존 상태에 병합(일반적으로는 덮어쓰기 방식)합니다. AgentGraphState의 리스트나 딕셔너리 필드를 업데이트할 때는 해당 필드의 복사본을 만들어 수정한 후 전체 상태의 일부로 반환해야 합니다.
-"""
+                return AgentGraphState(task_id=task_id, original_input=original_input, metadata=initial_metadata or {}, error_message=f"{error_detail} AND state conversion error.")
