@@ -34,9 +34,9 @@ class BaseTool(LangchainBaseTool, abc.ABC):
     """
 
     # LangChain BaseTool에서 name과 description은 필수 필드이므로 @property 제거
-    name: ClassVar[str] = ""
-    description: ClassVar[str] = ""
-    args_schema: ClassVar[Optional[Type[BaseModel]]] = None
+    name: str
+    description: str
+    args_schema: Optional[Type[BaseModel]] = None
 
 
     # return_direct는 LangChain BaseTool의 속성. 필요에 따라 설정.

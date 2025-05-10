@@ -58,7 +58,7 @@ class MockChatAnthropic:
         # API 파라미터
         max_tokens = merged_kwargs.get("max_tokens_to_sample", merged_kwargs.get("max_tokens", 1024))
         temperature = merged_kwargs.get("temperature", 0.7)
-        
+
         try:
             response = self.client.messages.create(
                 model=self.model_name,

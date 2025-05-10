@@ -131,20 +131,19 @@ async def run_workflow_background(
              logger.error(f"[BackgroundTask] Final state was None for task_id {task_id}, cannot save status.")
 
 # --- API 엔드포인트 정의 ---
-
 @router.post(
     "/run",
     response_model=TaskSubmittedResponse,
-    status_code=status.HTTP_202_ACCEPTED, # 비동기 처리 시작을 알리는 상태 코드
+    status_code=status.HTTP_202_ACCEPTED,
     summary="워크플로우 비동기 실행 요청",
     description="지정된 그래프 설정을 사용하여 워크플로우 실행을 요청합니다. 워크플로우는 백그라운드에서 실행되며, 반환된 task_id로 상태를 조회할 수 있습니다.",
     tags=["Workflow Execution"]
 )
 async def run_workflow_endpoint(
     request: RunWorkflowRequest,
-    background_tasks: BackgroundTasks,   # FastAPI 백그라운드 태스크 기능 주입
-    orchestrator: NewOrchestratorDep,    # Orchestrator 의존성 주입
-    memory_manager: MemoryManagerDep     # MemoryManager 의존성 주입
+    background_tasks: BackgroundTasks,
+    orchestrator: NewOrchestratorDep,
+    memory_manager: MemoryManagerDep
 ):
     """
     워크플로우 실행을 요청하고 백그라운드 처리를 시작합니다.
@@ -154,26 +153,25 @@ async def run_workflow_endpoint(
     - **task_id** (선택): 사용할 작업 ID. 없으면 자동 생성.
     - **initial_metadata** (선택): 초기 워크플로우 상태 메타데이터.
     """
-    task_id = request.task_id or generate_task_id(request.graph_config_name)
-    logger.info(f"API '/run': Received request for workflow '{request.graph_config_name}' with task_id: {task_id}")
+    task_id = request.task_id or generate_task_id("task_division")
+    logger.info(f"API '/run': Received request with input: {request.original_input[:50]}...")
 
     # 백그라운드 태스크 추가 시 예외 처리
     try:
+        # Always use task_division_workflow regardless of what was requested
         background_tasks.add_task(
-            run_workflow_background,   # 실행할 함수
-            orchestrator,              # 함수 인자 1
-            request.graph_config_name, # 함수 인자 2
-            task_id,                   # 함수 인자 3
-            request.original_input,    # 함수 인자 4
-            request.initial_metadata or {}, # 함수 인자 5
-            memory_manager             # 함수 인자 6
+            run_workflow_background,
+            orchestrator,
+            "task_division_workflow",  # Fixed to always use task division workflow
+            task_id,
+            request.original_input,
+            request.initial_metadata or {},
+            memory_manager
         )
-        logger.info(f"API '/run': Workflow task_id {task_id} submitted to background processing.")
-        # 작업 접수 성공 응답 반환
+        logger.info(f"API '/run': Task {task_id} submitted using task_division_workflow")
         return TaskSubmittedResponse(task_id=task_id, status="accepted")
     except Exception as e:
-        # 백그라운드 작업 등록 실패는 서버 내부 오류로 간주
-        logger.error(f"API '/run': Failed to submit background task for task_id {task_id}: {e}", exc_info=True)
+        logger.error(f"API '/run': Failed to submit background task: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to schedule workflow execution due to an internal error."

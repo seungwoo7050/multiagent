@@ -52,11 +52,26 @@ class AppSettings(BaseSettings):
         """
         지정한 그래프 이름의 JSON 파일을 읽어서 dict 로 반환합니다.
         파일이 없거나 파싱 오류 시 예외를 발생시킵니다.
+        graph_name에 .json 확장자가 있든 없든 처리합니다.
         """
-        path = Path(self.AGENT_GRAPH_CONFIG_DIR) / f"{graph_name}.json"
+        if not graph_name.endswith(".json"):
+            config_file_name = f"{graph_name}.json"
+        else:
+            config_file_name = graph_name
+
+        path = Path(self.AGENT_GRAPH_CONFIG_DIR) / config_file_name # 수정된 부분
+
+        _logger.debug(f"Attempting to load graph config from: {path}") # 디버깅 로그 추가
         if not path.exists():
+            _logger.error(f"Graph config file not found at path: {path}")
             raise FileNotFoundError(f"Graph config not found: {path}")
-        return json.loads(path.read_text(encoding="utf-8"))
+        try:
+            config_data = json.loads(path.read_text(encoding="utf-8"))
+            _logger.debug(f"Successfully loaded and parsed graph config: {config_file_name}")
+            return config_data
+        except json.JSONDecodeError as e:
+            _logger.error(f"JSONDecodeError for graph config {config_file_name}: {e}", exc_info=True)
+            raise
     
     # Worker/Task Config
     WORKER_COUNT: int = Field(default_factory=lambda: max(os.cpu_count() or 1, 1))
@@ -82,6 +97,7 @@ class AppSettings(BaseSettings):
     MEMORY_TTL: int = 86400
     CACHE_TTL: int = 3600
     MEMORY_MANAGER_CACHE_SIZE: int = 10000
+    MEMORY_MANAGER_CHAT_HISTORY_PREFIX: str = Field(default="chat_history", description="Prefix for chat history keys in memory manager")
 
     # LLM Config
     PRIMARY_LLM_PROVIDER: str = Field(..., description="기본 LLM 제공자 (openai, anthropic 등)")

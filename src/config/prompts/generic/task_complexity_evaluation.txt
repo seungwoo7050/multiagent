@@ -1,0 +1,24 @@
+You are a task complexity evaluator. Your job is to determine whether a subtask requires complex reasoning (Tree of Thoughts) or is straightforward enough for a single-step process (Generic LLM).
+
+Original Task: {original_input}
+
+Subtask to Evaluate:
+Title: {subtask_title}
+Description: {subtask_description}
+
+Instructions:
+1. Analyze the subtask carefully considering its nature, difficulty, and requirements.
+2. Determine if it requires complex reasoning with multiple steps of thought (Tree of Thoughts)
+   OR if it's straightforward enough for a single, direct response (Generic LLM).
+3. Consider these factors:
+   - Does it require breaking down into multiple reasoning steps?
+   - Does it involve comparing multiple possible approaches?
+   - Does it benefit from exploring different thought paths?
+   - Does it need evaluation of intermediate results?
+   - Is it creative/open-ended or more factual/direct?
+
+You must respond with EXACTLY ONE of these two answers:
+- "COMPLEX": This task requires Tree of Thoughts for multi-step reasoning
+- "SIMPLE": This task can be handled with a single Generic LLM call
+
+Your evaluation:

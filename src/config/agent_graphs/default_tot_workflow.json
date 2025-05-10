@@ -8,7 +8,7 @@
       "node_type": "thought_generator_node",
       "parameters": {
         "num_thoughts": 3,
-        "max_tokens_per_thought": 150,
+        "max_tokens_per_thought": 200,
         "temperature": 0.7,
         "prompt_template_path": "tot/generate_thoughts_v1.txt",
         "node_id": "ToT_Generator"
@@ -18,7 +18,7 @@
       "id": "state_evaluator",
       "node_type": "state_evaluator_node",
       "parameters": {
-        "max_tokens_per_eval": 100,
+        "max_tokens_per_eval": 150,
         "temperature": 0.4,
         "prompt_template_path": "tot/evaluate_state_v1.txt",
         "node_id": "ToT_Evaluator"
@@ -28,9 +28,9 @@
       "id": "search_strategy",
       "node_type": "search_strategy_node",
       "parameters": {
-        "beam_width": 1,
-        "score_threshold_to_finish": 0.9,
-        "min_score_to_continue": 0.2,
+        "beam_width": 2,
+        "score_threshold_to_finish": 0.7,
+        "min_score_to_continue": 0.1,
         "node_id": "ToT_Strategy"
       }
     }

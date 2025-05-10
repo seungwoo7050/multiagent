@@ -29,6 +29,9 @@ from src.agents.graph_nodes.generic_llm_node import GenericLLMNode
 from src.agents.graph_nodes.thought_generator_node import ThoughtGeneratorNode
 from src.agents.graph_nodes.state_evaluator_node import StateEvaluatorNode
 from src.agents.graph_nodes.search_strategy_node import SearchStrategyNode
+from src.agents.graph_nodes.task_division_node import TaskDivisionNode
+from src.agents.graph_nodes.task_complexity_evaluator_node import TaskComplexityEvaluatorNode
+from src.agents.graph_nodes.subtask_processor_node import SubtaskProcessorNode
 
 logger = get_logger(__name__)
 settings = get_settings()
@@ -39,7 +42,9 @@ REGISTERED_NODE_TYPES: Dict[str, Type[Any]] = {
     "thought_generator_node": ThoughtGeneratorNode,
     "state_evaluator_node": StateEvaluatorNode,
     "search_strategy_node": SearchStrategyNode,
-    # TODO: 추후 다른 노드 타입 추가 시 여기에 등록
+    "task_division_node": TaskDivisionNode,
+    "task_complexity_evaluator_node": TaskComplexityEvaluatorNode,
+    "subtask_processor_node": SubtaskProcessorNode,
 }
 
 
@@ -309,33 +314,19 @@ class Orchestrator:
                     target_map = {k: (END if v == "__end__" else v) for k, v in cond_edge_cfg.targets.items()}
                     default_target = END if cond_edge_cfg.default_target == "__end__" else cond_edge_cfg.default_target
 
-                    # 라우터 함수 수정: dict를 받도록
-                    # router_func = self._get_conditional_router_func(
-                    #     condition_key=cond_edge_cfg.condition_key,
-                    #     targets_map=target_map,
-                    #     default_decision=default_target or END
-                    # )
-                    # graph.add_conditional_edges(
-                    #     cond_edge_cfg.source, # <--- start_key 대신 위치 인자로 전달
-                    #     router_func,
-                    #     target_map # <--- conditional_edge_mapping 대신 target_map 전달
-                    # )
-                    # 최신 LangGraph 방식 (문자열 키와 함수 매핑)
-                    def create_router(cond_key, target_mapping, default):
-                        async def route(state: Dict[str, Any]): # dict 받음
-                            val = state.dynamic_data.get(cond_key)
-                            decision = target_mapping.get(str(val), default) # 문자열 키로 찾음
-                            logger.debug(f"Routing based on '{cond_key}'='{val}'. Decision: '{decision}'")
-                            return decision
-                        return route
-
-                    router_func_new = create_router(cond_edge_cfg.condition_key, cond_edge_cfg.targets, default_target or END)
+                    # 라우터 함수 개선
+                    router_func = self._get_conditional_router_func(
+                        cond_edge_cfg.condition_key,
+                        target_map,
+                        default_target or END
+                    )
+                    
+                    # LangGraph 0.4.2 호환
+                    possible_nodes = list(set(target_map.values()))
                     graph.add_conditional_edges(
                         cond_edge_cfg.source,
-                        router_func_new,
-                        # {'target1': 'target1_node', 'target2': 'target2_node', '__default__': END} 와 같이 명시적 매핑 필요
-                        # 또는 router_func_new가 직접 노드 ID를 반환하도록 수정
-                        # 여기서는 router_func_new가 ID를 반환한다고 가정
+                        router_func,
+                        possible_nodes
                     )
 
 
@@ -531,8 +522,23 @@ class Orchestrator:
 
 
             if final_state_dict and isinstance(final_state_dict, dict):
+                # 추가: final_answer 없는 경우 처리
+                if not final_state_dict.get("final_answer") and (
+                    final_state_dict.get("next_action") == "continue" or 
+                    final_state_dict.get("dynamic_data", {}).get("next_action") == "continue"
+                ):
+                    logger.warning(f"그래프가 continue 상태로 종료됐지만 final_answer 없음. 최적 결과 사용")
+                    # 최고 점수 thought 활용
+                    best_id = final_state_dict.get("current_best_thought_id")
+                    if best_id and "thoughts" in final_state_dict:
+                        for t in final_state_dict["thoughts"]:
+                            if isinstance(t, dict) and t.get("id") == best_id:
+                                final_state_dict["final_answer"] = t.get("content", "결과를 찾을 수 없음")
+                                break
+                
                 try:
                     final_state = msgspec.convert(final_state_dict, AgentGraphState, strict=False)
+                    # 기존 로직 계속
                     logger.info(f"Workflow '{graph_config_name}' for task {task_id} completed. Final Answer: {final_state.final_answer or 'N/A'}")
                     await self.notification_service.broadcast_to_task(
                         task_id,
