@@ -47,7 +47,17 @@ class AppSettings(BaseSettings):
         default=str(PROJECT_ROOT_DIR / "config" / "prompts"),
         description="Directory for prompt template files"
     )
-
+    
+    def load_graph_config(self, graph_name: str) -> dict:
+        """
+        지정한 그래프 이름의 JSON 파일을 읽어서 dict 로 반환합니다.
+        파일이 없거나 파싱 오류 시 예외를 발생시킵니다.
+        """
+        path = Path(self.AGENT_GRAPH_CONFIG_DIR) / f"{graph_name}.json"
+        if not path.exists():
+            raise FileNotFoundError(f"Graph config not found: {path}")
+        return json.loads(path.read_text(encoding="utf-8"))
+    
     # Worker/Task Config
     WORKER_COUNT: int = Field(default_factory=lambda: max(os.cpu_count() or 1, 1))
     MAX_CONCURRENT_TASKS: int = 100

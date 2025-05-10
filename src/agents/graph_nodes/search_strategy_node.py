@@ -72,9 +72,12 @@ class SearchStrategyNode:
                     best_t = state.get_thought_by_id(state.current_best_thought_id)
                     if best_t: final_answer_content = best_t.content
                 
+                # 에러 상태에서는 최소한의 정보만 반환
                 return {
                     "final_answer": final_answer_content,
-                    "error_message": "No new thoughts were evaluated or no valid scores found."
+                    "error_message": "No new thoughts were evaluated or no valid scores found.",
+                    "current_best_thought_id": state.current_best_thought_id,
+                    "next_action": "finish"  # <-- 중요: LangGraph 엣지 조건에 사용될 결정 값
                 }
 
             top_thoughts_for_expansion = evaluated_thoughts[:self.beam_width]
@@ -97,6 +100,7 @@ class SearchStrategyNode:
             final_answer_content = None
             strategy_decision = "continue_search"
             next_node_for_ws = "thought_generator"
+            next_action = "continue"  # <-- 기본 결정 값은 계속
 
             # --- 종료 조건 판단 (수정됨) ---
             # 1. 먼저 LangGraph의 recursion_limit 확인 - 이 값을 상태에 가져옴
@@ -110,6 +114,7 @@ class SearchStrategyNode:
                 final_answer_content = best_thought.content if best_thought else "Search stopped due to recursion limit."
                 strategy_decision = "finish_recursion_limit"
                 next_node_for_ws = None
+                next_action = "finish"  # <-- LangGraph 엣지 조건 결정 값
             
             # 3. 사용자 지정 max_search_depth 확인 (일반적으로 recursion_limit보다 작음)
             elif next_search_depth >= state.max_search_depth:
@@ -119,6 +124,7 @@ class SearchStrategyNode:
                 strategy_decision = "finish_max_depth"
                 next_node_for_ws = None
                 should_terminate = True
+                next_action = "finish"  # <-- LangGraph 엣지 조건 결정 값
             
             # 4. 높은 점수 찾음 - 대부분의 성공 케이스에서는 이걸로 종료
             elif current_round_best_thought.evaluation_score is not None and \
@@ -128,35 +134,46 @@ class SearchStrategyNode:
                 strategy_decision = "finish_high_score"
                 next_node_for_ws = None
                 should_terminate = True
+                next_action = "finish"  # <-- LangGraph 엣지 조건 결정 값
 
             # 5. 점수가 낮아서 더 이상 탐색할 가치가 없는 경우
             elif all(t.evaluation_score is not None and t.evaluation_score < self.min_score_to_continue for t in top_thoughts_for_expansion):
-                logger.warning(f"Node '{self.node_id}' (Task: {state.task_id}): All top {self.beam_width} thoughts below threshold. Stopping.")
+                logger.warning(f"Node '{self.node_id}' (Task: {task_id}): All top {self.beam_width} thoughts below threshold. Stopping.")
                 final_thought_to_use = state.get_thought_by_id(new_global_best_thought_id) if new_global_best_thought_id else current_round_best_thought
                 final_answer_content = final_thought_to_use.content if final_thought_to_use else "Exploration stopped due to low scores."
                 strategy_decision = "finish_low_score"
                 next_node_for_ws = None
                 should_terminate = True
+                next_action = "finish"  # <-- LangGraph 엣지 조건 결정 값
             
             else: # 계속 탐색
                 logger.info(f"Node '{self.node_id}' (Task: {state.task_id}): Proceeding to next search depth ({next_search_depth}). Best thought to expand based on: {new_global_best_thought_id}")
                 strategy_decision = "continue_search"
+                next_action = "continue"  # <-- LangGraph 엣지 조건 결정 값
 
-            # 상태 업데이트 생성 (단순화 및 확실한 종료 조건)
+            # 상태 업데이트 생성
             update_payload = {
                 "thoughts": state.thoughts,
                 "current_best_thought_id": new_global_best_thought_id,
-                "search_depth": next_search_depth
+                "next_action": next_action  # <-- 핵심: LangGraph 엣지 조건을 위한 명시적 필드
             }
-
-            # 핵심 수정: 종료 시 final_answer를 최우선 값으로 설정하고 다른 모든 필드를 secondary로 처리
+            
+            # 종료 조건별 특수 처리
             if should_terminate:
-                # LangGraph edge condition을 확실히 트리거하기 위해 최종 상태를 매우 간결하게 유지
-                return {
-                    "final_answer": final_answer_content
-                }
+                # 상황에 따라 search_depth와 error_message 다르게 처리
+                if strategy_decision == "finish_max_depth":
+                    update_payload["search_depth"] = next_search_depth  # 5로 설정
+                    update_payload["error_message"] = "Max search depth reached."
+                elif strategy_decision == "finish_high_score":
+                    update_payload["search_depth"] = state.search_depth  # 현재 깊이 유지
+                else:
+                    update_payload["search_depth"] = next_search_depth  # 다른 경우는 다음 깊이
+                
+                # LangGraph edge condition 트리거를 위해 final_answer 포함
+                update_payload["final_answer"] = final_answer_content
             else:
                 # 계속할 때는 final_answer를 명시적으로 None으로 설정
+                update_payload["search_depth"] = next_search_depth
                 update_payload["final_answer"] = None
 
             # 결정된 전략 알림
@@ -186,5 +203,5 @@ class SearchStrategyNode:
             )
             
             # 디버깅 로그 추가
-            logger.info(f"Node '{self.node_id}' (Task: {state.task_id}): Returning update with final_answer: {final_answer_content is not None}")
+            logger.info(f"Node '{self.node_id}' (Task: {state.task_id}): Returning update with final_answer: {final_answer_content is not None}, next_action: {next_action}")
             return update_payload

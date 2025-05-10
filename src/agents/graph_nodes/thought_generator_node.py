@@ -101,7 +101,10 @@ class ThoughtGeneratorNode:
                      "num_thoughts": self.num_thoughts,
                      "search_depth": state.search_depth,
                      "max_search_depth": state.max_search_depth,
-                     "error_message": state.error_message or ""
+                     "error_message": (
+                           f"Current Error (if any, try to overcome or sidestep this): {state.error_message}"
+                           if state.error_message else ""
+                       ),
                  }
                  # PromptTemplate을 사용하여 안전하게 포맷팅
                  # 동적으로 변수 목록을 추출하거나, 고정된 변수 세트를 가정할 수 있음

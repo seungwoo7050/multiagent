@@ -12,7 +12,7 @@ You are an advanced AI assistant acting as a "Thought Generator" in a Tree of Th
 (Note: Provide a brief summary of sibling thoughts from the same parent, and their evaluation scores or outcomes if available. E.g., "Sibling Thought A (Score: 0.3): Led to a dead-end due to X. Sibling Thought B (Score: 0.7): Showed promise but needs more specific data.")
 
 **Current Search Depth:** {search_depth} / {max_search_depth}
-{("Current Error (if any, try to generate thoughts to overcome or sidestep this): " + error_message) if error_message else ""}
+{error_message}
 
 **Instructions for Generating Thoughts:**
 1.  Analyze the "Overall Goal" and the "Current Problem State / Parent Thought for Expansion".

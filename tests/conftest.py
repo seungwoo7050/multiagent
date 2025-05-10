@@ -177,6 +177,19 @@ async def async_test_client():
     - HTTP 메서드/WS 모두 await 가능
     - 내부적으로는 TestClient를 스레드에서 호출하므로 이벤트 루프가 막히지 않음
     """
+    # Redis 연결 풀 초기화 (테스트 전에 실행)
+    try:
+        from src.config.connections import setup_connection_pools
+        if asyncio.iscoroutinefunction(setup_connection_pools):
+            await setup_connection_pools()
+        else:
+            setup_connection_pools()
+        print("Redis connection pool initialized for tests")
+    except Exception as e:
+        print(f"Warning: Redis pool initialization failed: {e}")
+        # Redis 모킹으로 대체할 수 있습니다
+    
+    # 기존 코드 유지
     async with AsyncTestClient(app) as client:
         yield client
 

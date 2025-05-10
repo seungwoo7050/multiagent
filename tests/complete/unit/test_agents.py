@@ -94,10 +94,10 @@ def tot_graph_config_content():
             {
                 "type": "conditional",
                 "source": "search_strategy",
-                "condition_key": "final_answer", # 라우터가 이 키를 확인
-                "targets": { # 라우터 함수의 반환값 -> 다음 노드 ID
-                    "value_is_not_none": "__end__", # final_answer가 있으면 종료
-                    "value_is_none": "thought_generator"  # 없으면 다시 생각 생성
+                "condition_key": "final_answer", 
+                "targets": {
+                    "value_is_not_none": "__end__", 
+                    "value_is_none": "thought_generator"
                 },
                 "default_target": "thought_generator" 
             }
@@ -106,6 +106,7 @@ def tot_graph_config_content():
 
 # --- Orchestrator 테스트 ---
 
+# Updated test_orchestrator_load_graph_config
 def test_orchestrator_load_graph_config(orchestrator_instance, simple_graph_config_content, tmp_path):
     """Orchestrator가 JSON 설정 파일을 올바르게 로드하는지 테스트합니다."""
     config_dir = tmp_path / "agent_graphs"
@@ -114,10 +115,18 @@ def test_orchestrator_load_graph_config(orchestrator_instance, simple_graph_conf
     config_file.write_text(json.dumps(simple_graph_config_content))
 
     # settings의 AGENT_GRAPH_CONFIG_DIR를 임시 디렉토리로 패치
-    with patch("src.agents.orchestrator.settings", AGENT_GRAPH_CONFIG_DIR=str(config_dir)):
+    # MagicMock 대신 직접 설정하여 파일 로드 로직 테스트
+    with patch("src.agents.orchestrator.settings") as mock_settings:
+        mock_settings.AGENT_GRAPH_CONFIG_DIR = str(config_dir)
+        # 필요한 경우 직접 load_graph_config 구현 제공 가능
+        # mock_settings.load_graph_config.return_value = simple_graph_config_content
+        
         loaded_config = orchestrator_instance._load_graph_config_from_file("test_simple_config")
         assert loaded_config["name"] == "TestSimplePromptAgentWorkflow"
         assert len(loaded_config["nodes"]) == 1
+        
+# 필요하다면 다른 테스트도 비슷하게 수정
+# 하지만 _load_graph_config_from_file 메서드 수정으로 기존 테스트도 작동해야 함
 
 
 @pytest.mark.asyncio

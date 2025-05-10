@@ -23,6 +23,9 @@ _test_in_memory_exporter: Optional[InMemorySpanExporter] = None
 
 def setup_telemetry(force_setup: bool = False, for_testing: bool = False) -> None:
     global _tracer_provider, _is_telemetry_setup_attempted, _test_in_memory_exporter
+    if not force_setup and _is_telemetry_setup_attempted:
+        logger.debug("Telemetry already initialised – skipping.")
+        return
     
     # 테스트 모드에서는 항상 새로 설정
     if for_testing:

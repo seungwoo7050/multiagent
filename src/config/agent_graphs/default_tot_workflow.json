@@ -49,11 +49,11 @@
     {
       "type": "conditional",
       "source": "search_strategy",
-      "condition_key": "final_answer",
+      "condition_key": "next_action",
       "targets": {
-        "exists": "__end__"
-      },
-      "default_target": "thought_generator"
+        "continue": "thought_generator",
+        "finish": "__end__"
+      }
     }
   ],
   "config": {
