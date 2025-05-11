@@ -5,7 +5,7 @@ import { AppContext } from '../context/ChatContext';
 
 const ChatWindow: React.FC = () => {
   const { state, dispatch } = useContext(AppContext)!;
-  const currentConv = state.conversations.find(c => c.id === state.currentConversationId);
+  const currentConvFromState = state.conversations.find(c => c.id === state.currentConversationId);
   const [inputText, setInputText] = useState('');
   const [isSending, setIsSending] = useState(false); // 로딩 상태 추가
 
@@ -21,10 +21,13 @@ const ChatWindow: React.FC = () => {
         socketRef.current = null;
       }
     };
-  }, [currentConv?.id]); // currentConv.id가 바뀔 때마다 이전 소켓 정리
+  }, [state.currentConversationId]); // currentConversationId를 의존성 배열에 추가
+
 
 
   const sendMessage = async () => {
+    const currentConv = state.conversations.find(c => c.id === state.currentConversationId);
+
     if (!currentConv || inputText.trim() === '' || isSending) { // isSending 추가
       console.log('[sendMessage] Aborted: No current conversation, empty input, or already sending.');
       return;
@@ -41,6 +44,7 @@ const ChatWindow: React.FC = () => {
     setInputText('');
 
     const API_BASE_URL = 'http://localhost:8000';
+    const API_PREFIX = '/api/v1'; // 실제 사용하는 API Prefix로 변경 (환경 변수 등으로 관리 권장)
     const graphConfigToUse = 'task_division_workflow'; // 실제 유효한 그래프 이름으로 변경 필요
 
     try {
@@ -50,16 +54,16 @@ const ChatWindow: React.FC = () => {
         initial_metadata: { conversation_id: currentConv.id }
       });
 
-      const response = await axios.post(`${API_BASE_URL}/api/v1/run`, {
+      const response = await axios.post(`${API_BASE_URL}${API_PREFIX}/run`, {
         original_input: userMessage,
         graph_config_name: graphConfigToUse,
         initial_metadata: { conversation_id: currentConv.id }
       });
 
-      const taskId: string = response.data.task_id;
-      console.log('[sendMessage] HTTP POST success. Received taskId:', taskId);
+      const taskIdFromResponse: string = response.data.task_id; 
+      console.log('[sendMessage] HTTP POST success. Received taskId:', taskIdFromResponse);
 
-      dispatch({ type: 'SET_TASK_ID', payload: { conversationId: currentConv.id, taskId } });
+      dispatch({ type: 'SET_TASK_ID', payload: { conversationId: currentConv.id, taskId: taskIdFromResponse } });
 
       // 이전 WebSocket 연결이 있다면 정리
       if (socketRef.current && socketRef.current.readyState === WebSocket.OPEN) {
@@ -67,27 +71,35 @@ const ChatWindow: React.FC = () => {
         socketRef.current.close();
       }
 
-
-      // const wsBaseUrl = API_BASE_URL.replace(/^http/, 'ws');
-      // const wsUrl = `<span class="math-inline">\{wsBaseUrl\}</span>{settings.API_PREFIX}/ws/status/${taskId}`; /
-      const wsUrl = `ws://localhost:8000/api/v1/ws/status/${taskId}`;
+      // 수정된 WebSocket URL 구성
+      const wsBaseUrl = API_BASE_URL.replace(/^http/, 'ws');
+      const wsUrl = `${wsBaseUrl}${API_PREFIX}/ws/status/${taskIdFromResponse}`;
       console.log('[sendMessage] Attempting to connect to WebSocket URL:', wsUrl);
 
       const socket = new WebSocket(wsUrl);
       socketRef.current = socket; // ref에 현재 소켓 저장
 
+      const originalTaskIdForThisSocket = taskIdFromResponse;
+
+
       socket.onopen = () => {
-        console.log('[WebSocket onopen] Connection successful for taskId:', taskId);
-        setIsSending(false); // WebSocket 연결 성공 시 로딩 종료 (또는 첫 메시지 수신 시)
-        dispatch({
-            type: 'STATUS_UPDATE',
-            payload: {
-              conversationId: currentConv.id,
-              status: 'connected_ws', // 웹소켓 연결 상태 명시
-              detail: `WebSocket 연결됨 (Task: ${taskId})`
-            }
-        });
+        console.log('[WebSocket onopen] Connection successful for taskId:', originalTaskIdForThisSocket);
+        setIsSending(false);
+        const currentActiveConvId = state.currentConversationId; // ★★★ 현재 state에서 가져옴
+        if (currentActiveConvId) { // ★★★ null 체크 추가
+            dispatch({
+                type: 'STATUS_UPDATE',
+                payload: {
+                  conversationId: currentActiveConvId, // ★★★ 변경
+                  status: 'connected_ws',
+                  detail: `WebSocket 연결됨 (Task: ${originalTaskIdForThisSocket})`
+                }
+            });
+        } else {
+            console.warn("[WebSocket onopen] No current conversation ID found in state. Cannot dispatch STATUS_UPDATE for onopen.");
+        }
       };
+
 
       socket.onmessage = (event) => {
         console.log('[WebSocket onmessage] Raw data received:', event.data);
@@ -95,15 +107,20 @@ const ChatWindow: React.FC = () => {
           const msg = JSON.parse(event.data as string);
           console.log('[WebSocket onmessage] Parsed message:', msg);
 
-          if (!currentConv) {
-            console.error('[WebSocket onmessage] CRITICAL: currentConv is undefined. Message:', msg);
+          // ★★★ 핵심 수정: originalTaskIdForThisSocket과 비교 ★★★
+          if (msg.task_id && msg.task_id !== originalTaskIdForThisSocket) {
+            console.warn(`[WebSocket onmessage] Received message for different taskId. Socket is for: ${originalTaskIdForThisSocket}, Message is for: ${msg.task_id}. Ignoring.`);
             return;
           }
-          // task_id가 메시지에 포함되어 있다면, 현재 대화의 task_id와 일치하는지 확인 (선택적)
-          if (msg.task_id && msg.task_id !== currentConv.taskId) {
-            console.warn(`[WebSocket onmessage] Received message for different taskId. Current: ${currentConv.taskId}, Received: ${msg.task_id}. Ignoring.`);
+
+          // dispatch 시 사용할 conversationId는 현재 활성화된 대화의 ID를 사용합니다.
+          const conversationIdForDispatch = state.currentConversationId;
+          if (!conversationIdForDispatch) {
+            console.error('[WebSocket onmessage] CRITICAL: currentConversationId is null in state. Cannot determine target conversation for dispatch. Message:', msg);
             return;
           }
+          // (선택적) 추가 로그: 어떤 conversationId로 dispatch 하는지 확인
+          // console.log(`[WebSocket onmessage] Dispatching to conversationId: ${conversationIdForDispatch} for task: ${msg.task_id}`);
 
 
           const eventType = msg.event_type;
@@ -113,7 +130,7 @@ const ChatWindow: React.FC = () => {
               dispatch({
                 type: 'STATUS_UPDATE',
                 payload: {
-                  conversationId: currentConv.id,
+                  conversationId: conversationIdForDispatch, // ★★★ 변경
                   status: msg.status,
                   detail: msg.detail,
                   currentNode: msg.current_node,
@@ -126,7 +143,7 @@ const ChatWindow: React.FC = () => {
               dispatch({
                 type: 'ADD_INTERMEDIATE_RESULT',
                 payload: {
-                  conversationId: currentConv.id,
+                  conversationId: conversationIdForDispatch, // ★★★ 변경
                   nodeId: msg.node_id,
                   resultStepName: msg.result_step_name,
                   data: msg.data
@@ -138,27 +155,27 @@ const ChatWindow: React.FC = () => {
               if (msg.final_answer !== undefined && msg.final_answer !== null) {
                 dispatch({
                   type: 'FINAL_RESULT',
-                  payload: { conversationId: currentConv.id, finalAnswer: msg.final_answer }
+                  payload: { conversationId: conversationIdForDispatch, finalAnswer: msg.final_answer } // ★★★ 변경
                 });
               }
-              if (msg.error_message) { // final_result에 에러가 같이 올 수 있음
+              if (msg.error_message) {
                 dispatch({
-                  type: 'FINAL_RESULT', // 또는 'ERROR' 액션 타입
-                  payload: { conversationId: currentConv.id, errorMessage: msg.error_message }
+                  type: 'FINAL_RESULT',
+                  payload: { conversationId: conversationIdForDispatch, errorMessage: msg.error_message } // ★★★ 변경
                 });
               }
-              console.log('[WebSocket onmessage] Closing socket after final_result.');
-              socket.close(1000, "Task completed"); // 정상 종료 코드 1000
-              socketRef.current = null; // ref 초기화
-              setIsSending(false); // 최종 결과 후 로딩 상태 해제
+              console.log('[WebSocket onmessage] Closing socket after final_result for taskId:', originalTaskIdForThisSocket);
+              socket.close(1000, "Task completed");
+              socketRef.current = null;
+              setIsSending(false);
               break;
-            case 'error': // WebSocket 프로토콜 상의 에러 메시지 (websocket_models.py에 정의됨)
+            case 'error':
               console.log('[WebSocket onmessage] Dispatching ERROR from server message:', msg);
               dispatch({
                 type: 'ERROR',
-                payload: { conversationId: currentConv.id, errorMessage: msg.message }
+                payload: { conversationId: conversationIdForDispatch, errorMessage: msg.message } // ★★★ 변경
               });
-              console.log('[WebSocket onmessage] Closing socket after server error message.');
+              console.log('[WebSocket onmessage] Closing socket after server error message for taskId:', originalTaskIdForThisSocket);
               socket.close(1000, "Server error reported");
               socketRef.current = null;
               setIsSending(false);
@@ -168,27 +185,31 @@ const ChatWindow: React.FC = () => {
           }
         } catch (e) {
           console.error('[WebSocket onmessage] Error parsing JSON or dispatching:', e, 'Original data:', event.data);
-          if (currentConv) {
+          const convIdForError = state.currentConversationId;
+          if (convIdForError) {
             dispatch({
               type: 'ERROR',
-              payload: { conversationId: currentConv.id, errorMessage: '수신 데이터 처리 중 오류 발생' }
+              payload: { conversationId: convIdForError, errorMessage: '수신 데이터 처리 중 오류 발생' }
             });
           }
           setIsSending(false);
         }
       };
 
+
       socket.onerror = (errorEvent) => {
         console.error('[WebSocket onerror] WebSocket error occurred:', errorEvent, 'URL attempted:', wsUrl);
-        setIsSending(false); // 에러 발생 시 로딩 종료
-        if (currentConv) {
+        setIsSending(false);
+        const convIdForError = state.currentConversationId; // ★★★ 현재 state에서 가져옴
+        if (convIdForError) { // ★★★ null 체크 추가
           dispatch({
             type: 'ERROR',
-            payload: { conversationId: currentConv.id, errorMessage: 'WebSocket 연결 중 심각한 오류 발생' }
+            payload: { conversationId: convIdForError, errorMessage: 'WebSocket 연결 중 심각한 오류 발생' } // ★★★ 변경
           });
         }
-        socketRef.current = null; // 에러 시 ref 초기화
+        socketRef.current = null;
       };
+
 
       socket.onclose = (closeEvent) => {
         console.log('[WebSocket onclose] Connection closed. Code:', closeEvent.code, 'Reason:', `"${closeEvent.reason}"`, 'WasClean:', closeEvent.wasClean);
@@ -242,28 +263,28 @@ const ChatWindow: React.FC = () => {
   return (
     <div className="chat-window">
       <div className="messages">
-        {currentConv ? (
+        {currentConvFromState ? (
           <>
-            {currentConv.messages.map((msg, idx) => (
+            {currentConvFromState.messages.map((msg, idx) => (
               <div key={idx} className={`message ${msg.sender}`}>
                 <strong>{msg.sender === 'user' ? 'User' : 'Assistant'}:</strong> {msg.content}
               </div>
             ))}
             {/* 로딩 상태 또는 작업 상태 메시지 */}
-            {(isSending || (currentConv.status && !['completed', 'failed', 'error', 'disconnected_ws'].includes(currentConv.status))) && (
+            {(isSending || (currentConvFromState.status && !['completed', 'failed', 'error', 'disconnected_ws'].includes(currentConvFromState.status))) && (
               <div className="message assistant">
                 <em>
-                  {currentConv.status === 'connected_ws' || currentConv.status === 'pending_connection' ? '연결 중...' :
-                   currentConv.status === 'running' || currentConv.status === 'status_update' ? `작업 진행 중 (${currentConv.statusDetail || currentConv.status})...` :
+                  {currentConvFromState.status === 'connected_ws' || currentConvFromState.status === 'pending_connection' ? '연결 중...' :
+                   currentConvFromState.status === 'running' || currentConvFromState.status === 'status_update' ? `작업 진행 중 (${currentConvFromState.statusDetail || currentConvFromState.status})...` :
                    isSending ? '요청 전송 중...' :
-                   `상태: ${currentConv.status}...`}
+                   `상태: ${currentConvFromState.status}...`}
                 </em>
               </div>
             )}
             {/* 오류 발생 시 오류 메시지 표시 */}
-            {(currentConv.status === 'failed' || currentConv.status === 'error' || currentConv.status === 'disconnected_ws') && currentConv.errorMessage && (
+            {(currentConvFromState.status === 'failed' || currentConvFromState.status === 'error' || currentConvFromState.status === 'disconnected_ws') && currentConvFromState.errorMessage && (
               <div className="message error">
-                <strong>Error:</strong> {currentConv.errorMessage}
+                <strong>Error:</strong> {currentConvFromState.errorMessage}
               </div>
             )}
           </>
@@ -278,9 +299,9 @@ const ChatWindow: React.FC = () => {
           onChange={(e) => setInputText(e.target.value)}
           onKeyPress={(e) => { if (e.key === 'Enter' && !isSending) sendMessage(); }} // 엔터키로 전송, isSending 중복 방지
           placeholder="메시지를 입력하세요..."
-          disabled={isSending || !currentConv} // 로딩 중이거나 대화 없을 시 비활성화
+          disabled={isSending || !currentConvFromState} // 로딩 중이거나 대화 없을 시 비활성화
         />
-        <button onClick={sendMessage} disabled={isSending || !currentConv || inputText.trim() === ''}>
+        <button onClick={sendMessage} disabled={isSending || !currentConvFromState || inputText.trim() === ''}>
           {isSending ? '전송 중...' : '전송'}
         </button>
       </div>

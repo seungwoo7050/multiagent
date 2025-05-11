@@ -358,59 +358,105 @@ async def list_available_tools(
         )
         
 # --- WebSocket 엔드포인트 정의 ---
+# @router.websocket("/ws/status/{task_id}")
+# async def websocket_status_endpoint(
+#     websocket: WebSocket,
+#     notification_service: NotificationServiceDep,
+#     task_id: str = Path(..., description="상태 업데이트를 수신할 작업의 ID"),
+# ):
+#     """
+#     특정 task_id에 대한 실시간 상태 업데이트를 위한 WebSocket 엔드포인트입니다.
+#     클라이언트는 이 엔드포인트에 연결하여 작업 진행 상황을 실시간으로 받을 수 있습니다.
+#     """
+#     # tracer 블록 시작
+#     with tracer.start_as_current_span("WebSocket Connection") as conn_span:
+#         conn_span.set_attribute("websocket.task_id", task_id)
+#         conn_span.set_attribute("net.protocol.name", "websocket")
+#         client_host = websocket.client.host if websocket.client else "unknown"
+#         client_port = websocket.client.port if websocket.client else "unknown"
+#         conn_span.set_attribute("net.peer.ip", client_host)
+#         conn_span.set_attribute("net.peer.port", client_port)
+
+#         logger.info(f"WebSocket: [/ws/status/{task_id}] - Received connection request from {client_host}:{client_port}") # 로그 (1)
+
+#         try:
+#             logger.info(f"WebSocket: [/ws/status/{task_id}] - Attempting to accept connection...") # 로그 (2)
+#             await websocket.accept()
+#             logger.info(f"WebSocket: [/ws/status/{task_id}] - Connection accepted for {client_host}:{client_port}") # 로그 (3)
+#             conn_span.add_event("WebSocket accepted")
+
+#             logger.info(f"WebSocket: [/ws/status/{task_id}] - Attempting to subscribe to NotificationService...") # 로그 (4)
+#             await notification_service.subscribe(task_id, websocket)
+#             # 여기가 문제의 390번째 줄 근처일 수 있습니다. 윗줄과 들여쓰기 레벨이 동일해야 합니다.
+#             logger.info(f"WebSocket: [/ws/status/{task_id}] - Successfully subscribed to NotificationService.") # 로그 (5)
+#             conn_span.add_event("Subscribed to notifications")
+
+#             # ---- 연결 유지 루프 시작 (이 try 블록은 accept 및 subscribe 성공 후 실행됨) ----
+#             try:
+#                 while True:
+#                     # logger.debug(f"WebSocket: [/ws/status/{task_id}] - Maintaining connection loop...") # 로그 (6)
+#                     await asyncio.sleep(settings.WEBSOCKET_KEEP_ALIVE_INTERVAL if hasattr(settings, 'WEBSOCKET_KEEP_ALIVE_INTERVAL') else 60)
+
+#             except WebSocketDisconnect:
+#                 logger.info(f"WebSocket: [/ws/status/{task_id}] - Client {websocket.client} disconnected (WebSocketDisconnect).") # 로그 (7)
+#             except Exception as e_loop: # 루프 내 다른 예외
+#                 logger.error(f"WebSocket: [/ws/status/{task_id}] - Unexpected error in connection loop: {e_loop}", exc_info=True) # 로그 (8)
+#             # ---- 연결 유지 루프 종료 ----
+
+#         except Exception as e_initial: # websocket.accept() 또는 notification_service.subscribe()에서 발생할 수 있는 예외
+#             logger.error(f"WebSocket: [/ws/status/{task_id}] - Error during initial accept or subscribe: {e_initial}", exc_info=True) # 로그 (11)
+#             # 이 경우, 연결이 accept 되었다면 close를 시도하는 것이 좋으나,
+#             # FastAPI가 연결 상태에 따라 적절히 처리할 가능성이 높습니다.
+#             # 만약 websocket.close()를 여기서 호출한다면, 이미 닫힌 소켓에 대한 호출이 될 수 있어 주의해야 합니다.
+#             # 일반적으로 accept 실패 시 클라이언트는 이미 연결이 끊어진 것으로 간주합니다.
+
+#         finally: # 이 finally는 가장 바깥쪽 with tracer 블록 내의 try에 대한 finally입니다.
+#             logger.info(f"WebSocket: [/ws/status/{task_id}] - Starting unsubscribe process in finally block...") # 로그 (9)
+#             await notification_service.unsubscribe(task_id, websocket)
+#             logger.info(f"WebSocket: [/ws/status/{task_id}] - Connection closed and unsubscribed for client: {websocket.client}") # 로그 (10)
+
+# src/api/routers.py 수정 제안
+
 @router.websocket("/ws/status/{task_id}")
 async def websocket_status_endpoint(
     websocket: WebSocket,
     notification_service: NotificationServiceDep,
     task_id: str = Path(..., description="상태 업데이트를 수신할 작업의 ID"),
 ):
-    """
-    특정 task_id에 대한 실시간 상태 업데이트를 위한 WebSocket 엔드포인트입니다.
-    클라이언트는 이 엔드포인트에 연결하여 작업 진행 상황을 실시간으로 받을 수 있습니다.
-    """
-    # tracer 블록 시작
-    with tracer.start_as_current_span("WebSocket Connection") as conn_span:
-        conn_span.set_attribute("websocket.task_id", task_id)
-        conn_span.set_attribute("net.protocol.name", "websocket")
-        client_host = websocket.client.host if websocket.client else "unknown"
-        client_port = websocket.client.port if websocket.client else "unknown"
-        conn_span.set_attribute("net.peer.ip", client_host)
-        conn_span.set_attribute("net.peer.port", client_port)
+    print(f"DEBUG: websocket_status_endpoint CALLED for task_id: {task_id}, client: {websocket.client}")
+    client_host = websocket.client.host if websocket.client else "unknown"
+    client_port = websocket.client.port if websocket.client else "unknown"
+    logger.info(f"WebSocket: [/ws/status/{task_id}] - Connection request from {client_host}:{client_port}")
 
-        logger.info(f"WebSocket: [/ws/status/{task_id}] - Received connection request from {client_host}:{client_port}") # 로그 (1)
+    try:
+        # 1. 가장 먼저 연결 수락 시도
+        await websocket.accept()
+        logger.info(f"WebSocket: [/ws/status/{task_id}] - Connection ACCEPTED for {client_host}:{client_port}")
 
-        try:
-            logger.info(f"WebSocket: [/ws/status/{task_id}] - Attempting to accept connection...") # 로그 (2)
-            await websocket.accept()
-            logger.info(f"WebSocket: [/ws/status/{task_id}] - Connection accepted for {client_host}:{client_port}") # 로그 (3)
-            conn_span.add_event("WebSocket accepted")
+        # 2. 연결 수락 성공 후 구독 시도
+        logger.info(f"WebSocket: [/ws/status/{task_id}] - Attempting to subscribe to NotificationService...")
+        await notification_service.subscribe(task_id, websocket)
+        logger.info(f"WebSocket: [/ws/status/{task_id}] - Successfully SUBSCRIBED to NotificationService.")
 
-            logger.info(f"WebSocket: [/ws/status/{task_id}] - Attempting to subscribe to NotificationService...") # 로그 (4)
-            await notification_service.subscribe(task_id, websocket)
-            # 여기가 문제의 390번째 줄 근처일 수 있습니다. 윗줄과 들여쓰기 레벨이 동일해야 합니다.
-            logger.info(f"WebSocket: [/ws/status/{task_id}] - Successfully subscribed to NotificationService.") # 로그 (5)
-            conn_span.add_event("Subscribed to notifications")
+        # 3. 연결 유지 루프
+        while True:
+            # 클라이언트로부터 메시지를 수신 대기 (선택 사항, 현재 로직에서는 불필요)
+            # data = await websocket.receive_text()
+            # logger.debug(f"WebSocket: [/ws/status/{task_id}] - Received from client: {data}")
+            # 필요한 경우 Ping/Pong 또는 Keep-alive 메시지 전송 로직 추가 가능
+            await asyncio.sleep(settings.WEBSOCKET_KEEP_ALIVE_INTERVAL if hasattr(settings, 'WEBSOCKET_KEEP_ALIVE_INTERVAL') else 60)
 
-            # ---- 연결 유지 루프 시작 (이 try 블록은 accept 및 subscribe 성공 후 실행됨) ----
-            try:
-                while True:
-                    # logger.debug(f"WebSocket: [/ws/status/{task_id}] - Maintaining connection loop...") # 로그 (6)
-                    await asyncio.sleep(settings.WEBSOCKET_KEEP_ALIVE_INTERVAL if hasattr(settings, 'WEBSOCKET_KEEP_ALIVE_INTERVAL') else 60)
-
-            except WebSocketDisconnect:
-                logger.info(f"WebSocket: [/ws/status/{task_id}] - Client {websocket.client} disconnected (WebSocketDisconnect).") # 로그 (7)
-            except Exception as e_loop: # 루프 내 다른 예외
-                logger.error(f"WebSocket: [/ws/status/{task_id}] - Unexpected error in connection loop: {e_loop}", exc_info=True) # 로그 (8)
-            # ---- 연결 유지 루프 종료 ----
-
-        except Exception as e_initial: # websocket.accept() 또는 notification_service.subscribe()에서 발생할 수 있는 예외
-            logger.error(f"WebSocket: [/ws/status/{task_id}] - Error during initial accept or subscribe: {e_initial}", exc_info=True) # 로그 (11)
-            # 이 경우, 연결이 accept 되었다면 close를 시도하는 것이 좋으나,
-            # FastAPI가 연결 상태에 따라 적절히 처리할 가능성이 높습니다.
-            # 만약 websocket.close()를 여기서 호출한다면, 이미 닫힌 소켓에 대한 호출이 될 수 있어 주의해야 합니다.
-            # 일반적으로 accept 실패 시 클라이언트는 이미 연결이 끊어진 것으로 간주합니다.
-
-        finally: # 이 finally는 가장 바깥쪽 with tracer 블록 내의 try에 대한 finally입니다.
-            logger.info(f"WebSocket: [/ws/status/{task_id}] - Starting unsubscribe process in finally block...") # 로그 (9)
-            await notification_service.unsubscribe(task_id, websocket)
-            logger.info(f"WebSocket: [/ws/status/{task_id}] - Connection closed and unsubscribed for client: {websocket.client}") # 로그 (10)
+    except WebSocketDisconnect:
+        logger.info(f"WebSocket: [/ws/status/{task_id}] - Client {client_host}:{client_port} DISCONNECTED (WebSocketDisconnect).")
+    except Exception as e_ws: # accept, subscribe 또는 루프 내 모든 예외 처리
+        logger.error(f"WebSocket: [/ws/status/{task_id}] - ERROR for {client_host}:{client_port}: {e_ws}", exc_info=True)
+        # 연결이 이미 수락된 상태에서 예외가 발생했다면, 오류 코드를 전송하고 닫는 것을 고려할 수 있습니다.
+        # 하지만 accept() 단계에서 실패하면 send_json 등이 불가능하므로, try-except로 감싸고 finally에서 정리합니다.
+        # FastAPI는 accept 실패 시 자동으로 연결을 종료합니다.
+    finally:
+        logger.info(f"WebSocket: [/ws/status/{task_id}] - Cleaning up connection for {client_host}:{client_port} in finally block...")
+        await notification_service.unsubscribe(task_id, websocket)
+        # FastAPI WebSocket은 일반적으로 명시적인 close 호출 없이도 finally 블록 실행 후 정리되지만,
+        # 필요한 경우 `await websocket.close()`를 여기에 추가할 수 있습니다.
+        # 단, 이미 닫힌 소켓에 close를 호출하면 오류가 발생할 수 있으므로 상태 확인이 필요합니다.
+        logger.info(f"WebSocket: [/ws/status/{task_id}] - Connection for {client_host}:{client_port} CLEANED UP AND CLOSED.")
