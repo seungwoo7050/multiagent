@@ -38,7 +38,7 @@ class TaskComplexityRouterNode:
         self.model_name = model_name
         self.node_id = node_id
         
-        # Load the prompt template
+                                  
         self.prompt_template_path = os.path.join(
             settings.PROMPT_TEMPLATE_DIR,
             prompt_template_path
@@ -67,16 +67,16 @@ class TaskComplexityRouterNode:
             )
             
             error_message: Optional[str] = None
-            next_action = "process_simple_task"  # Default action is to process as simple
+            next_action = "process_simple_task"                                          
             
             try:
-                # Format the prompt
+                                   
                 formatted_prompt = self.prompt_template.format(
                     task=state.original_input,
                     complexity_threshold=self.complexity_threshold
                 )
                 
-                # Call the LLM
+                              
                 messages = [{"role": "user", "content": formatted_prompt}]
                 response = await self.llm_client.generate_response(
                     messages=messages,
@@ -85,14 +85,14 @@ class TaskComplexityRouterNode:
                     max_tokens=100
                 )
                 
-                # Parse the response to get the complexity score and decision
+                                                                             
                 lines = response.strip().split('\n')
                 complexity_score = None
                 for line in lines:
                     line = line.strip().lower()
                     if line.startswith("complexity score:"):
                         try:
-                            # Extract the score (expecting format like "Complexity Score: 0.75")
+                                                                                                
                             complexity_score = float(line.split(':')[1].strip())
                         except (ValueError, IndexError):
                             logger.warning(f"Node '{self.node_id}': Failed to parse complexity score from: {line}")
@@ -103,13 +103,13 @@ class TaskComplexityRouterNode:
                         else:
                             next_action = "process_simple_task"
                 
-                # If we extracted a score but no explicit decision, use the threshold
+                                                                                     
                 if complexity_score is not None and "decision:" not in response.lower():
                     next_action = "process_complex_task" if complexity_score >= self.complexity_threshold else "process_simple_task"
                 
                 logger.info(f"Node '{self.node_id}' (Task: {state.task_id}): Routing decision: {next_action} (Score: {complexity_score})")
                 
-                # Store routing information in dynamic_data
+                                                           
                 if state.dynamic_data is None:
                     state.dynamic_data = {}
                 
@@ -118,7 +118,7 @@ class TaskComplexityRouterNode:
                     "routing_decision": next_action,
                 })
                 
-                # Broadcast the routing decision
+                                                
                 await self.notification_service.broadcast_to_task(
                     state.task_id,
                     IntermediateResultMessage(
@@ -135,7 +135,7 @@ class TaskComplexityRouterNode:
             except Exception as e:
                 error_message = f"Error evaluating task complexity: {str(e)}"
                 logger.error(f"Node '{self.node_id}' (Task: {state.task_id}): {error_message}", exc_info=True)
-                next_action = "process_complex_task"  # Default to complex on error
+                next_action = "process_complex_task"                               
             
             await self.notification_service.broadcast_to_task(
                 state.task_id,
@@ -148,7 +148,7 @@ class TaskComplexityRouterNode:
                 )
             )
             
-            # Return the routing decision
+                                         
             return {
                 "dynamic_data": state.dynamic_data,
                 "error_message": error_message,

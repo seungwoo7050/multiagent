@@ -1,7 +1,3 @@
-# src/schemas/enums.py
-"""
-API 및 시스템 전반에서 사용되는 공통 Enum 정의
-"""
 from enum import Enum
 
 class TaskPriority(str, Enum):
@@ -21,4 +17,4 @@ class TaskState(str, Enum):
     RUNNING = "running"
     COMPLETED = "completed"
     FAILED = "failed"
-    CANCELED = "canceled" # 일관성을 위해 Enum 멤버 이름은 대문자로 유지
+    CANCELED = "canceled"                              

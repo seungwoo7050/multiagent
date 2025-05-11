@@ -10,8 +10,7 @@ from typing import Optional, Union
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
-
-# Thread-safe counter
+                     
 class _Counter:
     def __init__(self):
         self.value = 0
@@ -24,7 +23,7 @@ class _Counter:
                 self.value = 0
             return self.value
 
-# Initialize global variables
+                             
 _id_counter = _Counter()
 _node_id = ''.join(random.choices(string.hexdigits, k=6)).lower()
 _process_id = str(os.getpid() % 10000).zfill(4)
@@ -46,7 +45,7 @@ def generate_sequential_id(prefix: str='') -> str:
         return f'{timestamp}-{counter_value}'
 
 def generate_snowflake_id() -> int:
-    counter_value = _id_counter.increment(4095)  # Reset at 4095 (12 bits max)
+    counter_value = _id_counter.increment(4095)                               
     timestamp = int(time.time() * 1000)
     node_int = int(_node_id, 16) & 1023
     snowflake = (timestamp << 22) | (node_int << 12) | counter_value

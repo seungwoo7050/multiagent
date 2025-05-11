@@ -1,4 +1,3 @@
-# src/agents/graph_nodes/task_complexity_evaluator_node.py
 import os
 from typing import Any, Dict, List, Optional
 
@@ -22,7 +21,7 @@ class TaskComplexityEvaluatorNode:
         self,
         llm_client: LLMClient,
         notification_service: NotificationService,
-        temperature: float = 0.3,  # Lower temperature for more deterministic evaluation
+        temperature: float = 0.3,                                                       
         prompt_template_path: Optional[str] = "generic/task_complexity_evaluation.txt",
         model_name: Optional[str] = None,
         node_id: str = "task_complexity_evaluator"
@@ -71,7 +70,7 @@ class TaskComplexityEvaluatorNode:
             except Exception as e:
                 logger.error(f"Error formatting prompt template in TaskComplexityEvaluatorNode '{self.node_id}': {e}. Falling back to default internal prompt.")
 
-        # Default internal prompt if template loading fails
+                                                           
         return f"""
         You are a task complexity evaluator. Your job is to determine whether a subtask requires complex reasoning (Tree of Thoughts) or is straightforward enough for a single-step process (Generic LLM).
 
@@ -123,7 +122,7 @@ class TaskComplexityEvaluatorNode:
 
             error_message: Optional[str] = None
             
-            # Check if we have subtasks to process
+                                                  
             if not state.dynamic_data or "subtasks" not in state.dynamic_data or not state.dynamic_data["subtasks"]:
                 error_message = "No subtasks available to evaluate"
                 logger.error(f"Node '{self.node_id}' (Task: {state.task_id}): {error_message}")
@@ -131,18 +130,18 @@ class TaskComplexityEvaluatorNode:
                 return {
                     "dynamic_data": state.dynamic_data,
                     "error_message": error_message,
-                    "next_action": "__end__"  # End the workflow if there are no subtasks
+                    "next_action": "__end__"                                             
                 }
                 
-            # Get the current subtask index
+                                           
             current_idx = state.dynamic_data.get("current_subtask_index", 0)
             subtasks = state.dynamic_data["subtasks"]
             
-            # Check if we're done with all subtasks
+                                                   
             if current_idx is None or current_idx >= len(subtasks):
                 logger.info(f"Node '{self.node_id}' (Task: {state.task_id}): All subtasks have been evaluated")
                 
-                # Compile final results into a single answer
+                                                            
                 final_results = []
                 for subtask in subtasks:
                     if "result" in subtask:
@@ -166,26 +165,26 @@ class TaskComplexityEvaluatorNode:
                 return {
                     "dynamic_data": state.dynamic_data,
                     "final_answer": final_answer,
-                    "next_action": "__end__"  # End the workflow
+                    "next_action": "__end__"                    
                 }
             
-            # Get the current subtask to evaluate
+                                                 
             current_subtask = subtasks[current_idx]
             
             try:
-                # Generate the prompt
+                                     
                 evaluation_prompt = self._construct_prompt(current_subtask, state)
                 logger.debug(f"Node '{self.node_id}' (Task: {state.task_id}): Evaluation prompt constructed for subtask {current_idx}")
                 
                 retry_counts = state.dynamic_data.get("complexity_eval_retries", {})
-                subtask_id = str(current_idx)  # 딕셔너리 키로 사용하기 위해 문자열로 변환
+                subtask_id = str(current_idx)                           
                 retry_counts[subtask_id] = retry_counts.get(subtask_id, 0) + 1
                 state.dynamic_data["complexity_eval_retries"] = retry_counts
                 
-                # 재시도 횟수 초과 시 기본값으로 처리
-                if retry_counts[subtask_id] > 2:  # 최대 3번 시도 (초기 1번 + 재시도 2번)
+                                      
+                if retry_counts[subtask_id] > 2:                             
                     logger.warning(f"Node '{self.node_id}' (Task: {state.task_id}): Maximum retry attempts reached for subtask {current_idx}. Using default complexity.")
-                    # 기본값으로 '복잡함'으로 설정 - 보수적 접근
+                                               
                     subtasks[current_idx]["is_complex"] = True
                     
                     await self.notification_service.broadcast_to_task(
@@ -198,10 +197,10 @@ class TaskComplexityEvaluatorNode:
                         )
                     )
                     
-                    # 진행 계속
+                           
                     next_action = "process_complex_subtask"
                     
-                    # 현재 서브태스크 저장 및 반환
+                                      
                     state.dynamic_data["current_subtask"] = current_subtask
                     return {
                         "dynamic_data": state.dynamic_data.copy(),
@@ -209,17 +208,16 @@ class TaskComplexityEvaluatorNode:
                         "next_action": next_action,
                     }
 
-
-                # Call the LLM to evaluate complexity
+                                                     
                 evaluation_response = await self.llm_client.generate_response(
                     messages=[{"role": "user", "content": evaluation_prompt}],
                     model_name=self.model_name,
                     temperature=self.temperature,
-                    max_tokens=100  # Short response needed
+                    max_tokens=100                         
                 )
                 logger.debug(f"Node '{self.node_id}' (Task: {state.task_id}): LLM evaluation received for subtask {current_idx}")
 
-                # Determine the complexity based on the response
+                                                                
                 evaluation_text = evaluation_response.strip().upper()
                 is_complex = "COMPLEX" in evaluation_text
                 logger.debug(
@@ -228,12 +226,12 @@ class TaskComplexityEvaluatorNode:
                     f"{'process_complex_subtask' if is_complex else 'process_simple_subtask'}"
                 )
                 
-                # Update the subtask with complexity information
+                                                                
                 subtasks[current_idx]["is_complex"] = is_complex
                 
                 logger.info(f"Node '{self.node_id}' (Task: {state.task_id}): Subtask {current_idx} evaluated as {'complex (ToT)' if is_complex else 'simple (GenericLLM)'}")
                 
-                # Broadcast the evaluation result - FIX: Using positional arguments
+                                                                                   
                 await self.notification_service.broadcast_to_task(
                     state.task_id,
                     IntermediateResultMessage(
@@ -248,10 +246,10 @@ class TaskComplexityEvaluatorNode:
                     )
                 )
 
-                # Determine next action based on complexity
+                                                           
                 next_action = "process_complex_subtask" if is_complex else "process_simple_subtask"
                 
-                # Store the current subtask data for easy access in the next nodes
+                                                                                  
                 state.dynamic_data["current_subtask"] = current_subtask
 
                 await self.notification_service.broadcast_to_task(
@@ -266,7 +264,7 @@ class TaskComplexityEvaluatorNode:
                 )
                 current_desc = current_subtask.get("description", state.original_input)
                 return {
-                    "dynamic_data": state.dynamic_data.copy() if state.dynamic_data else {},  # Create a copy to preserve dynamic_data
+                    "dynamic_data": state.dynamic_data.copy() if state.dynamic_data else {},                                          
                     "original_input": current_desc,
                     "next_action": next_action,
                 }
@@ -275,11 +273,11 @@ class TaskComplexityEvaluatorNode:
                 logger.error(f"Node '{self.node_id}' (Task: {state.task_id}): Error during complexity evaluation: {e}", exc_info=True)
                 error_message = f"Error in TaskComplexityEvaluatorNode '{self.node_id}': {e}"
                 
-                # Mark this subtask as failed and move to the next one
-                subtasks[current_idx]["is_complex"] = None  # Unclear
+                                                                      
+                subtasks[current_idx]["is_complex"] = None           
                 subtasks[current_idx]["error"] = str(e)
                 
-                # Increment to the next subtask
+                                               
                 state.dynamic_data["current_subtask_index"] = current_idx + 1
                 
                 await self.notification_service.broadcast_to_task(
@@ -289,16 +287,16 @@ class TaskComplexityEvaluatorNode:
                         status="node_completed", 
                         detail=f"Node '{self.node_id}' (Complexity Evaluator) encountered an error. Moving to next subtask.", 
                         current_node=self.node_id, 
-                        next_node="task_complexity_evaluator"  # Loop back to self for the next subtask
+                        next_node="task_complexity_evaluator"                                          
                     )
                 )
                 
                 return {
                     "dynamic_data": state.dynamic_data,
-                    "final_answer": None,  # Clear for next subtask
-                    "thoughts": [],  # Clear thoughts
+                    "final_answer": None,                          
+                    "thoughts": [],                  
                     "current_thoughts_to_evaluate": [],
                     "current_best_thought_id": None,
                     "search_depth": 0,
-                    "next_action": "task_complexity_evaluator"  # Return to evaluator for the next subtask
+                    "next_action": "task_complexity_evaluator"                                            
                 }

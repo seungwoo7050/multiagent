@@ -26,7 +26,7 @@ class StateEvaluatorNode:
         prompt_template_path: Optional[str] = None,
         model_name: Optional[str] = None,
         node_id: str = "state_evaluator",
-        default_score: float = 0.5  # 기본 점수 추가
+        default_score: float = 0.5            
     ):
         self.llm_client = llm_client
         self.notification_service = notification_service
@@ -35,7 +35,7 @@ class StateEvaluatorNode:
         self.prompt_template_path = prompt_template_path
         self.model_name = model_name
         self.node_id = node_id
-        self.default_score = default_score  # 기본 점수 저장
+        self.default_score = default_score            
         self.prompt_template_str = self._load_prompt_template_if_path_exists()
         logger.info(
             f"StateEvaluatorNode '{self.node_id}' initialized. "
@@ -78,7 +78,7 @@ class StateEvaluatorNode:
             except Exception as e:
                  logger.error(f"Error formatting prompt template in StateEvaluatorNode '{self.node_id}': {e}. Falling back to default internal prompt.")
 
-        # 기본 내부 프롬프트 - 명확하고 간결한 지침 추가
+                                     
         evaluation_criteria = """
         Evaluation Criteria:
         1. Relevance to Goal (Weight: 40%): How directly and significantly does this thought contribute to achieving the "Overall Goal"?
@@ -124,7 +124,7 @@ class StateEvaluatorNode:
         """평가 응답 문자열을 파싱하여 점수와 이유를 추출"""
         response_str = response_str.strip()
         
-        # 1. 일반적인 Score: X.Y 포맷 찾기
+                                  
         score_match = re.search(r"Score:\s*([0-9.]+)", response_str, re.IGNORECASE)
         if score_match:
             try:
@@ -134,9 +134,9 @@ class StateEvaluatorNode:
                     reasoning = reasoning_match.group(1).strip() if reasoning_match else "No reasoning provided."
                     return score, reasoning
             except ValueError:
-                pass  # 숫자 변환 실패 - 다음 방법 시도
+                pass                       
         
-        # 2. 첫 줄이 숫자만 있는 경우 (Score: 없이)
+                                       
         lines = response_str.split('\n')
         if lines and lines[0].strip().replace('.', '', 1).isdigit():
             try:
@@ -145,9 +145,9 @@ class StateEvaluatorNode:
                     reasoning = '\n'.join(lines[1:]).strip() or "No reasoning provided."
                     return score, reasoning
             except ValueError:
-                pass  # 숫자 변환 실패 - 다음 방법 시도
+                pass                       
         
-        # 3. 텍스트 중 숫자 찾기 (마지막 시도)
+                                 
         number_matches = re.findall(r"([0-9](?:\.[0-9]+)?)", response_str)
         for match in number_matches:
             try:
@@ -158,7 +158,7 @@ class StateEvaluatorNode:
             except ValueError:
                 continue
         
-        # 파싱 실패 - 기본값 반환
+                        
         logger.warning(f"Could not parse score from evaluation response. Using default score {self.default_score}. Response: {response_str[:100]}...")
         return self.default_score, f"Score parsing failed. Original response: {response_str[:200]}..."
 
@@ -215,7 +215,7 @@ class StateEvaluatorNode:
                     )
                     logger.debug(f"Node '{self.node_id}' (Task: {state.task_id}): Evaluation response for '{thought_to_eval.id}': {eval_response_str[:100]}...")
 
-                    # 개선된 파싱 로직 사용
+                                  
                     score, reasoning = self._parse_evaluation_response(eval_response_str)
                     
                     updated_metadata = thought_to_eval.metadata.copy() if thought_to_eval.metadata else {}
@@ -230,7 +230,7 @@ class StateEvaluatorNode:
                     any_evaluation_done = True
                     evaluations_summary_for_log.append(f"Thought '{thought_to_eval.id}': Score={score:.2f}")
 
-                    # 각 생각 평가 완료 알림
+                                   
                     await self.notification_service.broadcast_to_task(
                         state.task_id,
                         IntermediateResultMessage(
@@ -243,12 +243,12 @@ class StateEvaluatorNode:
                 except Exception as e:
                     logger.error(f"Node '{self.node_id}' (Task: {state.task_id}): Error evaluating thought '{thought_id_to_eval}': {e}", exc_info=True)
                     
-                    # 실패 처리 - 기본 점수 설정, 실패로 표시하지 않고 평가 완료로 처리
+                                                             
                     updated_metadata = thought_to_eval.metadata.copy() if thought_to_eval.metadata else {}
                     updated_metadata['eval_error'] = str(e)
                     updated_metadata['eval_reasoning'] = f"Evaluation failed, using default score {self.default_score}. Error: {str(e)}"
                     
-                    # 오류가 있어도 평가 완료로 처리하고 기본 점수 사용
+                                                  
                     fallback_thought_version = Thought(
                         id=thought_to_eval.id, parent_id=thought_to_eval.parent_id, content=thought_to_eval.content,
                         evaluation_score=self.default_score, status="evaluated", metadata=updated_metadata

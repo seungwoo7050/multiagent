@@ -1,22 +1,5 @@
-"""
-API 요청에 사용되는 Pydantic 모델 정의
-"""
 from typing import Any, Dict, Optional, Union
-from pydantic import BaseModel, Field # , field_validator # TaskPriority 관련 validator는 제거
-# from src.schemas.enums import TaskPriority # TaskPriority 제거
-
-# 기존 CreateTaskRequest는 주석 처리 또는 삭제
-# class CreateTaskRequest(BaseModel):
-#     goal: str = Field(..., description="작업의 최종 목표")
-#     task_type: Optional[str] = Field(None, description="실행할 작업/에이전트 유형 (예: 'planning', 'code_generation')")
-#     input_data: Dict[str, Any] = Field(default_factory=dict, description="작업 실행에 필요한 입력 데이터")
-#     priority: TaskPriority = Field(default=TaskPriority.NORMAL, description="작업 우선순위 (LOW, NORMAL, HIGH, CRITICAL 또는 정수 1-4)")
-#     metadata: Optional[Dict[str, Any]] = Field(default_factory=dict, description="추가 메타데이터")
-#
-#     @field_validator('priority', mode='before')
-#     @classmethod
-#     def validate_priority(cls, v: Union[TaskPriority, int, str]) -> TaskPriority:
-#         # ... (기존 검증 로직) ...
+from pydantic import BaseModel, Field                                                    
 
 class RunWorkflowRequest(BaseModel):
     """

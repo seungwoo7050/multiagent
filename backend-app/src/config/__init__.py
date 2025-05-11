@@ -4,14 +4,14 @@ Multi-Agent Platform Configuration Package
 
 import logging
 
-# Set up a basic console logger for bootstrapping
+                                                 
 _bootstrap_logger = logging.getLogger("config.bootstrap")
 _bootstrap_handler = logging.StreamHandler()
 _bootstrap_handler.setFormatter(logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
 _bootstrap_logger.addHandler(_bootstrap_handler)
 _bootstrap_handler.setLevel(logging.INFO)
 
-# Module-level variables initialized later
+                                          
 settings = None
 logger = None
 
@@ -25,7 +25,7 @@ def initialize_config() -> bool:
     global settings, logger
     
     try:
-        # Import here to avoid circular import
+                                              
         from src.config.settings import get_settings
         settings = get_settings()
         

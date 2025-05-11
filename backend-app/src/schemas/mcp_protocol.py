@@ -1,14 +1,8 @@
-# src/schemas/mcp_protocol.py
-"""
-Model Context Protocol (MCP)의 기본 인터페이스 및 스키마 정의
-"""
 import abc
 import time
 from typing import Any, Dict, Optional, TypeVar, cast
 from pydantic import BaseModel, Field, ConfigDict
-from src.utils.ids import generate_uuid # ID 생성을 위해 임포트
-
-# --- MCP 인터페이스 ---
+from src.utils.ids import generate_uuid                
 
 class ContextProtocol(abc.ABC, BaseModel):
     """
@@ -36,16 +30,15 @@ class ContextProtocol(abc.ABC, BaseModel):
 
     def get_metadata(self) -> Dict[str, Any]:
         """컨텍스트의 메타데이터를 반환합니다."""
-        # 기본 구현: 버전과 클래스 이름을 메타데이터로 제공
+                                      
         return {'version': self.version, 'context_type': self.__class__.__name__}
 
-    # Pydantic v2 스타일 설정
+                        
     model_config = ConfigDict(
         arbitrary_types_allowed=True,
     )
 
-
-# --- MCP 기본 스키마 ---
+                    
 
 class BaseContextSchema(ContextProtocol):
     """
@@ -58,31 +51,29 @@ class BaseContextSchema(ContextProtocol):
 
     def serialize(self) -> Dict[str, Any]:
         """Pydantic 모델을 사용하여 직렬화합니다."""
-        # Pydantic v2의 model_dump 사용
+                                    
         return self.model_dump(mode='json')
 
     @classmethod
     def deserialize(cls: type['BaseContextSchema'], data: Dict[str, Any]) -> 'BaseContextSchema':
         """Pydantic 모델을 사용하여 역직렬화합니다."""
-        # Pydantic v2의 model_validate 사용
+                                        
         return cls.model_validate(data)
 
     def optimize(self) -> 'BaseContextSchema':
         """기본 최적화 (메타데이터 정리 등). 하위 클래스에서 재정의 가능."""
-        # Pydantic v2의 model_copy 사용
+                                    
         optimized = self.model_copy()
-        # 예시: 비어있는 메타데이터 필드는 제거 (실제 구현은 필요에 따라 다름)
+                                                  
         if not optimized.metadata:
-            pass # 필요시 메타데이터 제거 또는 정리 로직 추가
+            pass                           
         return cast(BaseContextSchema, optimized)
 
-    # Pydantic v2 스타일 설정
+                        
     model_config = ConfigDict(
         arbitrary_types_allowed=True,
-        validate_assignment=True, # 필드 값 변경 시 유효성 검사
+        validate_assignment=True,                   
     )
-
-# --- 특정 태스크 컨텍스트 예시 (필요시 확장) ---
 
 class TaskContext(BaseContextSchema):
     """특정 작업을 나타내는 컨텍스트 예시"""
@@ -90,11 +81,10 @@ class TaskContext(BaseContextSchema):
     task_type: str = Field(..., description="작업 유형")
     input_data: Optional[Dict[str, Any]] = Field(None, description="작업 입력 데이터")
     current_step: Optional[str] = Field(None, description="현재 진행 중인 단계")
-
-    # TaskContext에 특화된 optimize 메서드 (예시)
+                                        
     def optimize(self) -> 'TaskContext':
-        optimized = super().optimize() # 기본 최적화 수행
-        # 추가적인 TaskContext 최적화 로직 (예: input_data의 특정 필드 제거)
-        # if optimized.input_data and 'large_blob' in optimized.input_data:
-        #     optimized.input_data.pop('large_blob')
+        optimized = super().optimize()            
+                                                           
+                                                                           
+                                                    
         return cast(TaskContext, optimized)

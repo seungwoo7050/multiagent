@@ -58,7 +58,7 @@
     }
   ],
   "config": {
-    "recursion_limit": 1,
-    "max_search_depth": 1
+    "recursion_limit": 5,
+    "max_search_depth": 3
   }
 }

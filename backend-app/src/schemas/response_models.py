@@ -1,18 +1,11 @@
-"""
-API 응답에 사용되는 Pydantic 모델 정의
-"""
 from enum import Enum
 from typing import Any, Dict, List, Optional, Literal, Union
 from pydantic import BaseModel, Field
-# TaskState Enum 대신 문자열 상태를 사용하도록 변경 가능 (AgentGraphState 와 맞추기 위해)
-# from src.schemas.enums import TaskState
-
-# --- Task Related Responses ---
 
 class TaskSubmittedResponse(BaseModel):
     """작업 제출 성공 시 응답 모델"""
     task_id: str = Field(..., description="새로 생성된 작업의 고유 ID")
-    # status를 'accepted'로 고정하여 비동기 처리를 명확히 함
+                                            
     status: Literal["accepted"] = Field(default="accepted", description="작업 접수 상태")
 
 class WorkflowStatusResponse(BaseModel):
@@ -31,7 +24,7 @@ class WorkflowStatusResponse(BaseModel):
         None,
         description="오류 발생 시 메시지. AgentGraphState의 error_message 필드에 해당합니다."
     )
-    # AgentGraphState의 주요 필드를 추가하여 더 자세한 정보 제공 가능 (선택 사항)
+                                                         
     current_iteration: Optional[int] = Field(
         None,
         description="현재 반복 횟수 (AgentGraphState의 current_iteration)"
@@ -48,18 +41,17 @@ class WorkflowStatusResponse(BaseModel):
         None,
         description="워크플로우 관련 메타데이터 (AgentGraphState의 metadata)"
     )
-    # dynamic_data는 너무 클 수 있으므로 기본적으로 제외하고, 필요시 API 파라미터로 요청하도록 설계 가능
-    # dynamic_data: Optional[Dict[str, Any]] = Field(None, description="워크플로우의 동적 데이터")
+                                                                     
+                                                                                       
 
+                                                                  
+                                      
+                                               
+                                                                                                           
+                                                                                  
+                                                                                            
 
-# 기존 TaskStatusResponse는 WorkflowStatusResponse로 대체되므로 주석 처리 또는 삭제
-# class TaskStatusResponse(BaseModel):
-#     id: str = Field(..., description="작업 ID")
-#     state: TaskState = Field(..., description="현재 작업 상태 (pending, running, completed, failed, canceled)")
-#     result: Optional[Dict[str, Any]] = Field(None, description="작업 성공 시 결과 데이터")
-#     error: Optional[Union[str, Dict[str, Any]]] = Field(None, description="작업 실패 시 에러 정보")
-
-# --- Tool Related Responses (기존 유지 또는 개선) ---
+                                              
 
 class ToolSchemaProperty(BaseModel):
     """도구 인자 스키마의 속성(property) 정보 (기존 유지)"""
@@ -98,8 +90,7 @@ class ToolExecutionResponse(BaseModel):
     result: Optional[Any] = Field(None, description="도구 실행 결과 (성공 시)")
     error: Optional[Dict[str, Any]] = Field(None, description="에러 상세 정보 (실패 시)")
 
-
-# --- Context Related Responses (기존 유지) ---
+                                           
 
 class ContextResponse(BaseModel):
     """Context 조회 응답 모델"""
@@ -112,8 +103,7 @@ class ContextOperationResponse(BaseModel):
     status: Literal["created", "updated"] = Field(..., description="작업 상태")
     message: str = Field(..., description="결과 메시지")
 
-
-# --- Agent Related Responses (기존 유지) ---
+                                         
 
 class AgentInfo(BaseModel):
     """에이전트 목록 조회 시 사용되는 기본 정보 모델"""
@@ -139,14 +129,13 @@ class AgentDetailResponse(BaseModel):
     mcp_enabled: bool
     mcp_context_types: List[str] = Field(default_factory=list)
 
-
-# --- System Related Responses (기존 유지) ---
+                                          
 
 class HealthCheckResponse(BaseModel):
     """헬스체크 응답 모델"""
     status: str = Field(default='ok', description="시스템 상태")
 
-# --- (선택 사항) Graph/Tool List Responses ---
+                                           
 class GraphInfo(BaseModel):
     """사용 가능한 그래프 설정 정보"""
     name: str = Field(..., description="그래프 설정 파일 이름 (확장자 제외)")

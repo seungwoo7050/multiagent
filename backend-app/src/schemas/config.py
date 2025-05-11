@@ -1,4 +1,3 @@
-# src/schemas/config.py
 import os
 from copy import deepcopy
 from typing import Dict, List, Literal, Optional, Set, Union, Any
@@ -8,8 +7,7 @@ import json
 import logging
 from pathlib import Path
 
-
-_logger = logging.getLogger(__name__) # 로깅을 위해 추가
+_logger = logging.getLogger(__name__)            
 
 PROJECT_ROOT_DIR = Path(__file__).resolve().parent.parent
 
@@ -19,7 +17,7 @@ class LLMProviderSettings(BaseModel):
     endpoint: Optional[str] = Field(None, alias="ENDPOINT")
     model_config = ConfigDict(
         case_sensitive=False,
-        populate_by_name=True,  # 필드 이름 또는 별칭으로 채우기 허용
+        populate_by_name=True,                        
     )
 
 class AppSettings(BaseSettings):
@@ -27,13 +25,13 @@ class AppSettings(BaseSettings):
     Application settings schema loaded from environment variables.
     Defines all configuration variables for the application.
     """
-    # App Info
+              
     APP_NAME: str = 'MultiAgentPlatform'
     APP_VERSION: str = '0.1.0'
     ENVIRONMENT: Literal['development', 'production'] = 'development'
     DEBUG: bool = False
     
-    # Logging
+             
     LOG_LEVEL: Literal['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'] = 'INFO'
     LOG_FORMAT: Literal['json', 'text'] = 'json'
     LOG_TO_FILE: bool = False
@@ -43,7 +41,7 @@ class AppSettings(BaseSettings):
         default=str(PROJECT_ROOT_DIR / "config" / "agent_graphs"),
         description="Directory for dynamic agent graph configurations (e.g., JSON files)"
     )
-    PROMPT_TEMPLATE_DIR: str = Field( # 로드맵에 언급된 프롬프트 경로도 추가
+    PROMPT_TEMPLATE_DIR: str = Field(                       
         default=str(PROJECT_ROOT_DIR / "config" / "prompts"),
         description="Directory for prompt template files"
     )
@@ -59,9 +57,9 @@ class AppSettings(BaseSettings):
         else:
             config_file_name = graph_name
 
-        path = Path(self.AGENT_GRAPH_CONFIG_DIR) / config_file_name # 수정된 부분
+        path = Path(self.AGENT_GRAPH_CONFIG_DIR) / config_file_name         
 
-        _logger.debug(f"Attempting to load graph config from: {path}") # 디버깅 로그 추가
+        _logger.debug(f"Attempting to load graph config from: {path}")            
         if not path.exists():
             _logger.error(f"Graph config file not found at path: {path}")
             raise FileNotFoundError(f"Graph config not found: {path}")
@@ -73,61 +71,60 @@ class AppSettings(BaseSettings):
             _logger.error(f"JSONDecodeError for graph config {config_file_name}: {e}", exc_info=True)
             raise
     
-    # Worker/Task Config
+                        
     WORKER_COUNT: int = Field(default_factory=lambda: max(os.cpu_count() or 1, 1))
     MAX_CONCURRENT_TASKS: int = 100
-    TASK_STATUS_TTL: int = 86400 # Task 상태 유지 시간 (초)
+    TASK_STATUS_TTL: int = 86400                    
 
-    # General Service Config
-    REQUEST_TIMEOUT: float = Field(60.0, alias='DEFAULT_REQUEST_TIMEOUT') # .env.example과 맞춤
+                            
+    REQUEST_TIMEOUT: float = Field(60.0, alias='DEFAULT_REQUEST_TIMEOUT')                   
     ENABLE_PERFORMANCE_TRACKING: bool = True
 
-    # Redis Config (현재 REDIS_URL에서 파생될 수 있지만, 명시적으로 분리)
+                                                       
     REDIS_URL: str = 'redis://localhost:6379/0'
     REDIS_PASSWORD: Optional[str] = None
     REDIS_CONNECTION_POOL_SIZE: int = 20
-    # --- 로드맵 .env.example 기준 추가/수정 ---
-    # MEMORY_TYPE: str = 'redis' # 필요시 메모리 타입 선택용
+                                       
+                                                 
     REDIS_HOST: str = 'localhost'
     REDIS_PORT: int = 6379
     REDIS_DB: int = 0
-    # --- ---
+             
 
-    # Memory/Cache TTL
+                      
     MEMORY_TTL: int = 86400
     CACHE_TTL: int = 3600
     MEMORY_MANAGER_CACHE_SIZE: int = 10000
     MEMORY_MANAGER_CHAT_HISTORY_PREFIX: str = Field(default="chat_history", description="Prefix for chat history keys in memory manager")
 
-    # LLM Config
+                
     PRIMARY_LLM_PROVIDER: str = Field(..., description="기본 LLM 제공자 (openai, anthropic 등)")
     FALLBACK_LLM_PROVIDER: Optional[str] = Field(None, description="폴백 LLM 제공자 (선택 사항)")
     LLM_PROVIDERS: Dict[str, LLMProviderSettings] = Field(..., description="LLM 제공자별 설정")
     LLM_REQUEST_TIMEOUT: int = Field(60, description="LLM 요청 타임아웃(초)")
     LLM_MAX_RETRIES: int = Field(3, description="LLM 요청 최대 재시도 횟수")
     
-    # Agent Names
+                 
     PLANNER_AGENT_NAME: str = 'default_planner'
     EXECUTOR_AGENT_NAME: str = 'default_executor'
 
-    # API Config
-    API_HOST: str = '0.0.0.0' # .env.example 과 맞춤
+                
+    API_HOST: str = '0.0.0.0'                    
     API_PORT: int = 8000
     API_PREFIX: str = '/api/v1'
     CORS_ORIGINS: List[str] = ['*']
 
     WEBSOCKET_KEEP_ALIVE_INTERVAL: int = Field(60, description="WebSocket 연결 유지를 위한 서버 측 sleep 간격(초)")
 
-
-    # Metrics Config
+                    
     METRICS_ENABLED: bool = True
     METRICS_PORT: int = 9090
 
-    # Vector DB Config
+                      
     VECTOR_DB_URL: Optional[str] = None
     VECTOR_DB_TYPE: Literal['chroma', 'qdrant', 'faiss', 'none'] = 'none'
 
-    # Task Queue Config
+                       
     TASK_QUEUE_STREAM_NAME: str = "multi_agent_tasks"
     TASK_QUEUE_GROUP_NAME: str = "agent_workers"
 
@@ -144,7 +141,7 @@ class AppSettings(BaseSettings):
             warnings.append(f"PRIMARY_LLM_PROVIDER '{self.PRIMARY_LLM_PROVIDER}' not in LLM_PROVIDERS.")
         if self.FALLBACK_LLM_PROVIDER and self.FALLBACK_LLM_PROVIDER not in self.LLM_PROVIDERS:
             warnings.append(f"FALLBACK_LLM_PROVIDER '{self.FALLBACK_LLM_PROVIDER}' not in LLM_PROVIDERS.")
-        # Derive REDIS_HOST, REDIS_PORT, REDIS_DB from REDIS_URL if not set explicitly
+                                                                                      
         if self.REDIS_URL and (self.REDIS_HOST == 'localhost' or self.REDIS_PORT == 6379 or self.REDIS_DB == 0):
             try:
                 from urllib.parse import urlparse
@@ -164,6 +161,6 @@ class AppSettings(BaseSettings):
         env_file='.env',
         env_file_encoding='utf-8',
         extra='ignore',
-        case_sensitive=False, # 환경 변수 이름 대소문자 구분 안 함
-        env_nested_delimiter='__' # LLM_PROVIDERS_CONFIG__OPENAI__API_KEY 같은 형식 지원
+        case_sensitive=False,                       
+        env_nested_delimiter='__'                                                 
     )

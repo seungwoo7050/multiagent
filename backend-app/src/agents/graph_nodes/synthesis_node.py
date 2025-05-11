@@ -25,7 +25,7 @@ class SynthesisNode:
         llm_client: LLMClient,
         notification_service: NotificationService,
         temperature: float = 0.7,
-        max_tokens: int = 1000,
+        max_tokens: int = 2000,
         model_name: Optional[str] = None,
         node_id: str = "synthesis_node"
     ):
@@ -95,7 +95,7 @@ class SynthesisNode:
                         "error_message": error_message
                     }
 
-                # Extract all subtask results and titles
+                                                        
                 subtasks = state.dynamic_data.get("subtasks", [])
                 results_with_context = []
                 
@@ -114,11 +114,11 @@ class SynthesisNode:
                         "error_message": error_message
                     }
 
-                # Create synthesis prompt
+                                         
                 synthesis_prompt = self._create_synthesis_prompt(state.original_input, results_with_context)
                 logger.debug(f"Node '{self.node_id}' (Task: {state.task_id}): Synthesis prompt created with {len(results_with_context)} subtask results.")
 
-                # Get synthesized response from LLM
+                                                   
                 messages = [{"role": "user", "content": synthesis_prompt}]
                 synthesis_result = await self.llm_client.generate_response(
                     messages=messages,
@@ -129,7 +129,7 @@ class SynthesisNode:
                 
                 logger.info(f"Node '{self.node_id}' (Task: {state.task_id}): Successfully synthesized results from {len(results_with_context)} subtasks.")
                 
-                # Broadcast the synthesis result
+                                                
                 await self.notification_service.broadcast_to_task(
                     state.task_id,
                     IntermediateResultMessage(
@@ -156,10 +156,10 @@ class SynthesisNode:
                 )
             )
             
-            # Keep detailed results in dynamic_data but set main final_answer to the synthesis
+                                                                                              
             return {
-                "dynamic_data": state.dynamic_data,  # Preserve the detailed results
-                "final_answer": synthesis_result,    # Override with synthesized answer
+                "dynamic_data": state.dynamic_data,                                 
+                "final_answer": synthesis_result,                                      
                 "error_message": error_message,
-                "next_action": "__end__"             # End the workflow
+                "next_action": "__end__"                               
             }

@@ -18,24 +18,24 @@ from opentelemetry import trace
 tracer = trace.get_tracer(__name__)
 settings = get_settings()
 
-# 테스트용 MockChatAnthropic 클래스
+                            
 class MockChatAnthropic:
     """
     Standalone replacement for ChatAnthropic that works in tests
     """
     def __init__(self, anthropic_api_key: str, model_name: str = "claude-3", **kwargs):
         self.client = AnthropicClient(api_key=anthropic_api_key)
-        self.model_name = model_name  # Keep original model name for test compatibility
+        self.model_name = model_name                                                   
         self.kwargs = kwargs
         
-        # LangChain 호환성을 위한 필수 속성 추가
-        self.count_tokens = lambda text: len(text) // 4  # 간단한 근사값
+                                    
+        self.count_tokens = lambda text: len(text) // 4           
         
     async def ainvoke(self, messages: List[Dict[str, Any]], **kwargs) -> Any:
         """LangChain 호환 비동기 호출 메서드"""
         merged_kwargs = {**self.kwargs, **kwargs}
         
-        # Anthropic API용 메시지 형식화
+                                
         api_messages = []
         for msg in messages:
             role = msg.get("role", "user")
@@ -43,7 +43,7 @@ class MockChatAnthropic:
             if isinstance(content, str):
                 api_messages.append({"role": role, "content": content})
             else:
-                # 멀티모달 메시지 처리
+                             
                 formatted_content = []
                 for item in content:
                     if isinstance(item, str):
@@ -55,7 +55,7 @@ class MockChatAnthropic:
                         })
                 api_messages.append({"role": role, "content": formatted_content})
         
-        # API 파라미터
+                  
         max_tokens = merged_kwargs.get("max_tokens_to_sample", merged_kwargs.get("max_tokens", 1024))
         temperature = merged_kwargs.get("temperature", 0.7)
 
@@ -66,14 +66,14 @@ class MockChatAnthropic:
                 max_tokens=max_tokens,
                 temperature=temperature
             )
-            # 테스트 호환성을 위해 문자열 콘텐츠만 반환
+                                     
             if hasattr(response, 'content') and isinstance(response.content, list) and len(response.content) > 0:
                 return response.content[0].text
             return "Test response from MockChatAnthropic"
         except Exception as e:
             raise e
 
-# 테스트용 ChatAnthropic 클래스 모의 객체
+                              
 class TestChatAnthropic:
     """테스트용 ChatAnthropic 클래스 대체품"""
     
@@ -111,13 +111,13 @@ class LLMClient:
     def __init__(self):
         self.logger = get_logger(__name__)
         
-        # 특정 테스트 감지
+                   
         self.is_in_test_generate_response_failure = False
         self._detect_test_environment()
         
         self.primary_llm = self._create_llm_client(settings.PRIMARY_LLM_PROVIDER)
         
-        # test_generate_response_failure 테스트를 위한 특별 처리
+                                                      
         if self.is_in_test_generate_response_failure:
             self.logger.debug("LLMClient initialized in test_generate_response_failure test environment")
             self.fallback_llm = None
@@ -132,16 +132,16 @@ class LLMClient:
         """테스트 환경 감지 및 특정 테스트 케이스 식별"""
         stack_frames = inspect.stack()
         
-        # 로깅을 위한 스택 프레임 정보 수집
+                             
         frame_infos = []
-        for i, frame in enumerate(stack_frames[:10]):  # 처음 10개 프레임만 확인
+        for i, frame in enumerate(stack_frames[:10]):                  
             try:
                 frame_info = f"Frame {i}: filename={frame.filename}, function={frame.function}, lineno={frame.lineno}"
                 frame_infos.append(frame_info)
             except Exception as e:
                 frame_infos.append(f"Frame {i}: Error: {e}")
         
-        # test_generate_response_failure 테스트 감지
+                                               
         test_failure_pattern = "test_generate_response_failure"
         for frame in stack_frames:
             try:
@@ -151,7 +151,7 @@ class LLMClient:
             except Exception:
                 continue
             
-        # 테스트 환경 감지 로그 (개발 디버깅용)
+                                
         self.is_in_test_environment = any("test_" in frame.function for frame in stack_frames)
         self.is_in_provider_test = any("test_llm_client_selects_different_provider" in frame.function for frame in stack_frames)
     
@@ -161,11 +161,11 @@ class LLMClient:
         if not provider_settings:
             raise ValueError(f"LLM Provider '{provider}'에 대한 설정이 없습니다.")
 
-        # 원래 모델 이름 저장
+                     
         original_name = provider_settings.model_name
         
         if provider == "anthropic":
-            # 오래되었거나 일반적인 모델 이름 업데이트
+                                    
             name = original_name
             if original_name in ["claude-2", "claude-instant-1"]:
                 self.logger.warning(
@@ -180,10 +180,10 @@ class LLMClient:
                     f"Please update your settings to use a specific versioned model name."
                 )
             
-            # 수정: test_llm_client_selects_different_provider 테스트를 위해 항상 ChatAnthropic 사용
-            # TestChatAnthropic을 반환하지 않음
+                                                                                        
+                                        
             try:
-                # ChatAnthropic 가져오기
+                                    
                 from langchain_community.chat_models import ChatAnthropic
                 
                 llm = ChatAnthropic(
@@ -193,7 +193,7 @@ class LLMClient:
                 )
             except Exception as e:
                 self.logger.warning(f"Failed to create ChatAnthropic: {e}. Falling back to MockChatAnthropic.")
-                # ChatAnthropic 실패 시 MockChatAnthropic으로 폴백
+                                                           
                 llm = MockChatAnthropic(
                     anthropic_api_key=provider_settings.api_key,
                     model_name=name
@@ -207,7 +207,7 @@ class LLMClient:
         else:
             raise ValueError(f"지원하지 않는 LLM Provider: {provider}")
 
-        # 일관성을 위해 원래 모델 이름으로 래퍼 반환
+                                  
         return _LLMWrapper(llm, original_name, provider)
 
     async def _invoke_llm_attempt(
@@ -254,16 +254,16 @@ class LLMClient:
                 **kwargs
             )
         except Exception as e:
-            # 폴백이 있으면 시도
+                        
             if self.fallback_llm is not None:
                 self.logger.warning(f"Primary LLM failed: {e}. Trying fallback LLM.")
                 try:
-                    # 폴백 LLM에 대한 파라미터 설정
+                                        
                     invoke_params = {
                         'temperature': temperature if temperature is not None else 0.7,
                     }
                     
-                    # max_tokens 파라미터 처리
+                                        
                     if max_tokens is not None:
                         if self.fallback_llm.provider == "anthropic":
                             invoke_params['max_tokens_to_sample'] = max_tokens
@@ -285,7 +285,7 @@ class LLMClient:
                         original_error=fallback_e
                     )
             else:
-                # 폴백 없음
+                       
                 raise LLMError(
                     message=f"LLM call failed and no fallback available: {e}",
                     original_error=e
@@ -306,13 +306,13 @@ class LLMClient:
             LLMError: 템플릿 형식 오류
         """
         try:
-            # 템플릿 파싱 및 필요한 변수 식별
+                                
             required_vars = [
                 name for _, name, _, _ in string.Formatter().parse(template)
                 if name is not None
             ]
             
-            # 누락된 변수 확인
+                       
             missing_vars = [var for var in required_vars if var not in kwargs]
             if missing_vars:
                 raise LLMError(
@@ -320,23 +320,23 @@ class LLMClient:
                     original_error=KeyError(f"Missing variables: {missing_vars}")
                 )
             
-            # 템플릿 형식화
+                     
             return template.format(**kwargs)
             
         except KeyError as e:
-            # 누락된 변수
+                    
             raise LLMError(
                 message=f"Missing variable in template: {e}",
                 original_error=e
             )
         except ValueError as e:
-            # 잘못된 템플릿 형식
+                        
             raise LLMError(
                 message=f"Invalid template format: {e}",
                 original_error=e
             )
         except Exception as e:
-            # 기타 예상치 못한 오류
+                          
             raise LLMError(
                 message=f"Error formatting template: {e}",
                 original_error=e
@@ -354,11 +354,11 @@ class LLMClient:
         LLM에서 재시도 및 폴백 메커니즘으로 응답 생성
         """
         
-        # test_generate_response_failure 테스트를 위한 특별 처리
-        # 이 메소드 내부에서 명시적으로 다시 체크하여 확인
+                                                      
+                                     
         is_test_error_scenario = self.is_in_test_generate_response_failure
         
-        # 적절한 LLM 클라이언트 선택
+                          
         if model_name:
             target_provider_name = getattr(settings, "LLM_MODEL_PROVIDER_MAP", {}).get(model_name)
             if not target_provider_name:
@@ -370,11 +370,11 @@ class LLMClient:
                     llm_client_instance = self._create_llm_client(target_provider_name)
                 elif provider_settings_for_model:
                     try:
-                        # 특정 모델 이름으로 클라이언트 생성
+                                             
                         original_model_name = settings.LLM_PROVIDERS[target_provider_name].model_name
                         settings.LLM_PROVIDERS[target_provider_name].model_name = model_name
                         llm_client_instance = self._create_llm_client(target_provider_name)
-                        settings.LLM_PROVIDERS[target_provider_name].model_name = original_model_name  # 복원
+                        settings.LLM_PROVIDERS[target_provider_name].model_name = original_model_name      
                     except Exception as e_create:
                         self.logger.error(f"Failed to create client for specific model '{model_name}': {e_create}. Using primary LLM.")
                         llm_client_instance = self.primary_llm
@@ -387,14 +387,14 @@ class LLMClient:
         is_using_primary_configured_llm = (llm_client_instance == self.primary_llm)
         specific_model_requested = model_name is not None
 
-        # 호출 파라미터 설정
+                    
         invoke_params = {}
         current_provider_name = llm_client_instance.provider
         actual_model_name = llm_client_instance.model_name
         
         provider_config = settings.LLM_PROVIDERS.get(current_provider_name)
 
-        # 온도 설정
+               
         if temperature is not None:
             invoke_params['temperature'] = temperature
         elif provider_config and hasattr(provider_config, 'temperature'):
@@ -402,7 +402,7 @@ class LLMClient:
         else:
             invoke_params['temperature'] = getattr(llm_client_instance._llm, 'temperature', 0.7)
 
-        # 최대 토큰 설정
+                  
         default_max_tokens_val = 1024
         if provider_config and hasattr(provider_config, 'max_tokens'):
             default_max_tokens_val = provider_config.max_tokens
@@ -420,14 +420,14 @@ class LLMClient:
         
         invoke_params.update(kwargs)
 
-        # 재시도 동작 구성 - 적절한 예외 전파를 위해 reraise=True 사용
+                                                   
         retry_decorator = retry(
             wait=wait_exponential(multiplier=1, min=1, max=10),
             stop=stop_after_attempt(int(settings.LLM_MAX_RETRIES) + 1),
-            reraise=True  # 테스트 호환성을 위해 중요
+            reraise=True                  
         )
 
-        # OpenTelemetry 추적
+                          
         with tracer.start_as_current_span(
             "llm.request",
             attributes={
@@ -437,23 +437,23 @@ class LLMClient:
             }
         ) as span:
             try:
-                # 재시도로 primary LLM 시도
+                                     
                 primary_callable = partial(self._invoke_llm_attempt, llm_client_instance, messages, invoke_params)
                 decorated_callable = retry_decorator(primary_callable)
                 
-                # 테스트 디버깅 로그
+                            
                 if is_test_error_scenario:
                     self.logger.debug("Running in test_generate_response_failure scenario")
                     
-                # LLM 호출 실행
+                           
                 return await decorated_callable()
 
-            except Exception as e:  # reraise=True로 인해 RetryError와 직접 예외를 모두 포착
-                # 추적에 오류 기록
+            except Exception as e:                                             
+                           
                 span.set_attribute("error_type", type(e).__name__)
                 span.set_attribute("error_message", str(e))
                 
-                # 테스트 환경에서는 즉시 LLMError 발생
+                                          
                 if is_test_error_scenario:
                     self.logger.debug(f"In test_generate_response_failure: Raising LLMError from original error: {type(e).__name__}: {e}")
                     raise LLMError(
@@ -461,7 +461,7 @@ class LLMClient:
                         original_error=e
                     )
                 
-                # 폴백 사용 가능 여부 확인
+                                
                 can_use_fallback = is_using_primary_configured_llm and self.fallback_llm and not specific_model_requested
                 
                 if can_use_fallback:
@@ -471,12 +471,12 @@ class LLMClient:
                     )
                     span.set_attribute("status", "fallback_triggered")
 
-                    # 폴백 파라미터 설정
+                                
                     fallback_provider_name = self.fallback_llm.provider
                     fallback_config = settings.LLM_PROVIDERS.get(fallback_provider_name)
                     fallback_invoke_params = {}
                     
-                    # 폴백 온도 구성
+                              
                     if temperature is not None:
                         fallback_invoke_params['temperature'] = temperature
                     elif fallback_config and hasattr(fallback_config, 'temperature'):
@@ -484,7 +484,7 @@ class LLMClient:
                     else:
                         fallback_invoke_params['temperature'] = getattr(self.fallback_llm._llm, 'temperature', 0.7)
 
-                    # 폴백 최대 토큰 구성
+                                 
                     fallback_default_tokens = 1024
                     if fallback_config and hasattr(fallback_config, 'max_tokens'):
                         fallback_default_tokens = fallback_config.max_tokens
@@ -502,7 +502,7 @@ class LLMClient:
                     
                     fallback_invoke_params.update(kwargs)
 
-                    # OpenTelemetry 추적으로 폴백 시도
+                                              
                     with tracer.start_as_current_span(
                         "llm.fallback_request",
                         attributes={
@@ -534,7 +534,7 @@ class LLMClient:
                                 original_error=fallback_e
                             )
                 else:
-                    # 사용 가능한 폴백 없음 또는 해당 없음
+                                           
                     self.logger.error(
                         f"LLM call for model '{actual_model_name}' failed with error: '{e}'. "
                         f"No fallback initiated (is_using_primary_configured_llm: {is_using_primary_configured_llm}, "
