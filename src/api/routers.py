@@ -368,58 +368,49 @@ async def websocket_status_endpoint(
     특정 task_id에 대한 실시간 상태 업데이트를 위한 WebSocket 엔드포인트입니다.
     클라이언트는 이 엔드포인트에 연결하여 작업 진행 상황을 실시간으로 받을 수 있습니다.
     """
+    # tracer 블록 시작
     with tracer.start_as_current_span("WebSocket Connection") as conn_span:
         conn_span.set_attribute("websocket.task_id", task_id)
         conn_span.set_attribute("net.protocol.name", "websocket")
         client_host = websocket.client.host if websocket.client else "unknown"
         client_port = websocket.client.port if websocket.client else "unknown"
-        conn_span.set_attribute("net.peer.ip", client_host) # net.peer.name으로도 가능
+        conn_span.set_attribute("net.peer.ip", client_host)
         conn_span.set_attribute("net.peer.port", client_port)
 
-        await websocket.accept()
-        logger.info(f"WebSocket client {websocket.client} connected for task_id: {task_id}")
-        conn_span.add_event("WebSocket accepted")
-
-        await notification_service.subscribe(task_id, websocket)
-        conn_span.add_event("Subscribed to notifications")
+        logger.info(f"WebSocket: [/ws/status/{task_id}] - Received connection request from {client_host}:{client_port}") # 로그 (1)
 
         try:
-            # 연결 유지 루프
-            # 이 루프는 클라이언트로부터 메시지를 기다리거나,
-            # 주기적으로 ping을 보내는 등의 용도로 사용될 수 있습니다.
-            # 현재는 NotificationService가 메시지를 푸시하므로, 여기서는 연결만 유지합니다.
-            while True:
-                # 클라이언트로부터 메시지를 받을 필요가 있다면 아래와 같이 처리:
-                # try:
-                #     data = await asyncio.wait_for(websocket.receive_text(), timeout=60) # 타임아웃 설정 가능
-                #     logger.debug(f"Received message from client for task {task_id}: {data}")
-                #     # (선택) 클라이언트 메시지 처리 로직 (예: 'ping'에 'pong' 응답)
-                #     if data.lower() == "ping":
-                #         await websocket.send_text("pong")
-                # except asyncio.TimeoutError:
-                #     # 타임아웃 시 ping 전송하여 연결 확인
-                #     try:
-                #         await websocket.send_text("ping_from_server") # 또는 WebSocket PING 프레임 사용
-                #     except Exception:
-                #         logger.warning(f"Failed to send ping to client for task {task_id}, connection might be lost.")
-                #         break # 연결 문제로 간주하고 루프 종료
-                # except WebSocketDisconnect: # 이 예외는 루프 밖에서 처리
-                #     raise
-                # except Exception as recv_err:
-                #     logger.error(f"Error receiving message from client for task {task_id}: {recv_err}")
-                #     break # 알 수 없는 오류 시 루프 종료
+            logger.info(f"WebSocket: [/ws/status/{task_id}] - Attempting to accept connection...") # 로그 (2)
+            await websocket.accept()
+            logger.info(f"WebSocket: [/ws/status/{task_id}] - Connection accepted for {client_host}:{client_port}") # 로그 (3)
+            conn_span.add_event("WebSocket accepted")
 
-                # 현재 구현에서는 서버가 일방적으로 푸시하므로,
-                # 클라이언트 메시지를 기다리지 않고 단순히 연결을 유지하도록 sleep.
-                # 또는 FastAPI의 WebSocketResponse를 사용하여 백그라운드에서 메시지 수신 처리도 가능.
-                await asyncio.sleep(settings.WEBSOCKET_KEEP_ALIVE_INTERVAL if hasattr(settings, 'WEBSOCKET_KEEP_ALIVE_INTERVAL') else 60) # 설정 파일에 추가 가능
+            logger.info(f"WebSocket: [/ws/status/{task_id}] - Attempting to subscribe to NotificationService...") # 로그 (4)
+            await notification_service.subscribe(task_id, websocket)
+            # 여기가 문제의 390번째 줄 근처일 수 있습니다. 윗줄과 들여쓰기 레벨이 동일해야 합니다.
+            logger.info(f"WebSocket: [/ws/status/{task_id}] - Successfully subscribed to NotificationService.") # 로그 (5)
+            conn_span.add_event("Subscribed to notifications")
 
-        except WebSocketDisconnect:
-            logger.info(f"WebSocket client {websocket.client} disconnected for task_id: {task_id}")
-        except Exception as e:
-            # 예상치 못한 오류 발생 시 (예: sleep 중 문제)
-            logger.error(f"Unexpected error in WebSocket connection for task_id {task_id}: {e}", exc_info=True)
-        finally:
-            # 연결 종료 시 항상 구독 해제
+            # ---- 연결 유지 루프 시작 (이 try 블록은 accept 및 subscribe 성공 후 실행됨) ----
+            try:
+                while True:
+                    # logger.debug(f"WebSocket: [/ws/status/{task_id}] - Maintaining connection loop...") # 로그 (6)
+                    await asyncio.sleep(settings.WEBSOCKET_KEEP_ALIVE_INTERVAL if hasattr(settings, 'WEBSOCKET_KEEP_ALIVE_INTERVAL') else 60)
+
+            except WebSocketDisconnect:
+                logger.info(f"WebSocket: [/ws/status/{task_id}] - Client {websocket.client} disconnected (WebSocketDisconnect).") # 로그 (7)
+            except Exception as e_loop: # 루프 내 다른 예외
+                logger.error(f"WebSocket: [/ws/status/{task_id}] - Unexpected error in connection loop: {e_loop}", exc_info=True) # 로그 (8)
+            # ---- 연결 유지 루프 종료 ----
+
+        except Exception as e_initial: # websocket.accept() 또는 notification_service.subscribe()에서 발생할 수 있는 예외
+            logger.error(f"WebSocket: [/ws/status/{task_id}] - Error during initial accept or subscribe: {e_initial}", exc_info=True) # 로그 (11)
+            # 이 경우, 연결이 accept 되었다면 close를 시도하는 것이 좋으나,
+            # FastAPI가 연결 상태에 따라 적절히 처리할 가능성이 높습니다.
+            # 만약 websocket.close()를 여기서 호출한다면, 이미 닫힌 소켓에 대한 호출이 될 수 있어 주의해야 합니다.
+            # 일반적으로 accept 실패 시 클라이언트는 이미 연결이 끊어진 것으로 간주합니다.
+
+        finally: # 이 finally는 가장 바깥쪽 with tracer 블록 내의 try에 대한 finally입니다.
+            logger.info(f"WebSocket: [/ws/status/{task_id}] - Starting unsubscribe process in finally block...") # 로그 (9)
             await notification_service.unsubscribe(task_id, websocket)
-            logger.info(f"WebSocket connection closed and unsubscribed for task_id: {task_id}, client: {websocket.client}")
+            logger.info(f"WebSocket: [/ws/status/{task_id}] - Connection closed and unsubscribed for client: {websocket.client}") # 로그 (10)

@@ -181,62 +181,81 @@ class GenericLLMNode:
             logger.error(f"Node '{self.node_id}': Failed to load conversation history: {e}", exc_info=True)
             return f"Error loading conversation history: {e}"
 
-    async def _prepare_prompt_input(self, state: AgentGraphState) -> Dict[str, Any]: # <--- 비동기 함수로 변경
+    async def _prepare_prompt_input(self, state: AgentGraphState) -> Dict[str, Any]:
         prompt_input = {}
         all_expected_vars = self.prompt_template.input_variables
 
         for key in all_expected_vars:
             value = None
-            # 1. 상태 객체 속성에서 직접 찾기
+
+            # 1. state 속성
             if hasattr(state, key):
                 value = getattr(state, key)
-            # 2. dynamic_data에서 점(.) 경로 지원
-            elif hasattr(state, 'dynamic_data') and isinstance(state.dynamic_data, dict):
-                if '.' in key:
-                    parts = key.split('.')
+
+            # 2. 점(.) 표기법으로 nested key 지원
+            elif '.' in key:
+                parts = key.split('.')
+                # dynamic_data.xxx.yyy...
+                if parts[0] == 'dynamic_data' and isinstance(state.dynamic_data, dict):
                     val = state.dynamic_data
-                    for p in parts:
-                        if isinstance(val, dict) and p in val:
-                            val = val[p]
-                        else:
-                            val = None
-                            break
-                    value = val
-                elif key in state.dynamic_data:
-                    value = state.dynamic_data[key]
-            # 3. metadata 딕셔너리에서 찾기
-            elif hasattr(state, 'metadata') and isinstance(state.metadata, dict) and key in state.metadata:
+                    parts = parts[1:]
+                # metadata.xxx.yyy...
+                elif parts[0] == 'metadata' and isinstance(state.metadata, dict):
+                    val = state.metadata
+                    parts = parts[1:]
+                # state.xxx.yyy...
+                elif hasattr(state, parts[0]):
+                    val = getattr(state, parts[0])
+                    parts = parts[1:]
+                else:
+                    val = None
+                    parts = []
+
+                for p in parts:
+                    if isinstance(val, dict) and p in val:
+                        val = val[p]
+                    else:
+                        val = None
+                        break
+                value = val
+
+            # 3. dynamic_data 최상위 키
+            elif isinstance(state.dynamic_data, dict) and key in state.dynamic_data:
+                value = state.dynamic_data[key]
+
+            # 4. metadata 최상위 키
+            elif isinstance(state.metadata, dict) and key in state.metadata:
                 value = state.metadata[key]
 
-            # <<< MemoryManager를 사용한 히스토리 로드 시작 >>>
+            # 5. 히스토리 / 도구 목록 등 special case
             if key == self.history_prompt_key and self.history_key_prefix:
-                value = await self._load_conversation_history(state) # <--- 히스토리 로드 호출
-            # <<< MemoryManager를 사용한 히스토리 로드 끝 >>>
-            # 특별 처리: 도구 목록 및 이력 (도구 사용 시에만)
-            elif self.enable_tool_use: # history_prompt_key 와 중복될 수 있으므로 elif 사용
+                value = await self._load_conversation_history(state)
+            elif self.enable_tool_use:
                 if key == 'available_tools':
                     value = self._get_available_tools_for_prompt()
                 elif key == 'tool_call_history':
-                    history = state.dynamic_data.get('tool_call_history', []) if isinstance(state.dynamic_data, dict) else []
-                    value = "\n".join([f"Tool: {call.get('tool_name')}, Args: {call.get('args')}, Result: {call.get('result')}" for call in history]) if history else "No tool calls yet."
+                    history = state.dynamic_data.get('tool_call_history', []) or []
+                    value = "\n".join(f"Tool: {c['tool_name']}, Args: {c['args']}, Result: {c['result']}" for c in history)
                 elif key == 'scratchpad':
-                    value = state.dynamic_data.get('scratchpad', "") if isinstance(state.dynamic_data, dict) else ""
+                    value = state.dynamic_data.get('scratchpad', "")
 
+            # 6. 값 없으면 빈 문자열로
             if value is None:
-                if key in self.input_keys_for_prompt or key == self.history_prompt_key: # 히스토리 키도 필수 간주
-                    logger.warning(f"Key '{key}' for prompt not found in state for node '{self.node_id}'. Using empty string.")
-                    prompt_input[key] = ""
-                else:
-                    prompt_input[key] = ""
+                if key in self.input_keys_for_prompt or key == self.history_prompt_key:
+                    logger.warning(f"Key '{key}' for prompt not found; using empty string.")
+                prompt_input[key] = ""
             else:
-                if isinstance(value, (list, dict)) and key != 'messages': # 'messages'는 LLMInputMessage 리스트일 수 있음
+                # JSON 직렬화가 필요하면 json.dumps
+                if isinstance(value, (list, dict)) and key != 'messages':
                     try:
                         prompt_input[key] = json.dumps(value, indent=2, default=str)
-                    except Exception:
+                    except:
                         prompt_input[key] = str(value)
                 else:
                     prompt_input[key] = value
+
         return prompt_input
+
 
 
 

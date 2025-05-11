@@ -20,21 +20,43 @@ class NotificationService:
         logger.info("NotificationService initialized.")
 
     async def subscribe(self, task_id: str, websocket: WebSocket) -> None:
+        # ★★★ 로그 추가 (A) ★★★
+        logger.info(f"NotificationService: Attempting to subscribe task_id: {task_id} for client: {websocket.client}")
+        cached_msg_to_send = None # 리플레이할 메시지 임시 저장
+
         async with self._lock:
+            # ★★★ 로그 추가 (B) ★★★
+            logger.debug(f"NotificationService: Lock acquired for task_id: {task_id}, client: {websocket.client}")
             first_join = websocket not in self._subscribers[task_id]
             if first_join:
                 self._subscribers[task_id].append(websocket)
-                logger.info(f"{websocket.client} subscribed to {task_id}")
-            # dict 형태로 저장돼 있으므로 그대로 얻음
-            cached_msg = self._last_message.get(task_id)
+                # ★★★ 로그 추가 (C) ★★★
+                logger.info(f"NotificationService: Client {websocket.client} newly subscribed to task_id: {task_id}. Total subscribers: {len(self._subscribers[task_id])}")
+            else:
+                # ★★★ 로그 추가 (D) ★★★
+                logger.info(f"NotificationService: Client {websocket.client} re-subscribed or already present for task_id: {task_id}. Total subscribers: {len(self._subscribers[task_id])}")
 
-        # 🔔 구독 직후 캐시된 마지막 메시지 리플레이
-        if cached_msg is not None and first_join:
+            cached_msg = self._last_message.get(task_id)
+            if cached_msg is not None and first_join:
+                cached_msg_to_send = cached_msg # 락 외부에서 전송하기 위해 저장
+                # ★★★ 로그 추가 (E) ★★★
+                logger.debug(f"NotificationService: Found cached message for task_id: {task_id} to replay for new subscriber.")
+            # ★★★ 로그 추가 (F) ★★★
+            logger.debug(f"NotificationService: Lock released for task_id: {task_id}, client: {websocket.client}")
+
+
+        if cached_msg_to_send is not None: # 락 외부에서 실제 send_json 호출
             try:
-                await websocket.send_json(cached_msg)
-                logger.debug(f"Replayed cached msg to late subscriber of {task_id}")
+                # ★★★ 로그 추가 (G) ★★★
+                logger.info(f"NotificationService: Attempting to replay cached message to client: {websocket.client} for task_id: {task_id}")
+                await websocket.send_json(cached_msg_to_send)
+                # ★★★ 로그 추가 (H) ★★★
+                logger.debug(f"NotificationService: Successfully replayed cached message to client: {websocket.client} for task_id: {task_id}")
             except Exception as exc:
-                logger.warning(f"Replay to {websocket.client} failed: {exc}")
+                # ★★★ 로그 추가 (I) ★★★
+                logger.warning(f"NotificationService: Failed to replay cached message to client: {websocket.client} for task_id: {task_id}. Error: {exc}", exc_info=True)
+        # ★★★ 로그 추가 (J) ★★★
+        logger.info(f"NotificationService: Subscription process completed for task_id: {task_id}, client: {websocket.client}")
 
     async def broadcast_to_task(
         self, task_id: str, message_model: WebSocketMessageBase
