@@ -92,6 +92,7 @@ class AgentGraphState(msgspec.Struct, omit_defaults=True, forbid_unknown_fields=
     """
     task_id: str # 현재 처리 중인 작업의 ID
     original_input: Any # 워크플로우 시작 시의 원본 입력
+    next_action: Optional[str] = None     
     current_iteration: int = 0 # 현재 반복 횟수 (ToT의 깊이 또는 일반 루프용)
     
     # ToT 관련 필드

@@ -321,21 +321,24 @@ class GenericLLMNode:
                 output_key = self.output_field_name or "final_answer"
 
                 if '.' in output_key:
-                     parent_key, child_key = output_key.split('.', 1)
-                     if parent_key == "dynamic_data":
-                          # Ensure dynamic_data exists in the update dictionary
-                          if "dynamic_data" not in update_dict:
-                               update_dict["dynamic_data"] = {}
-                          # Add the result to dynamic_data
-                          update_dict["dynamic_data"][child_key] = llm_response_str
-                          # Add last input/output to dynamic_data as well
-                          update_dict["dynamic_data"]["last_llm_input"] = formatted_prompt
-                          update_dict["dynamic_data"]["last_llm_output"] = llm_response_str
-                     else:
-                          logger.warning(f"Cannot set output to non-dynamic_data nested field '{output_key}'. Storing in 'final_answer'.")
-                          update_dict["final_answer"] = llm_response_str
+                    parent_key, child_key = output_key.split('.', 1)
+                    if parent_key == "dynamic_data":
+                        # Ensure dynamic_data exists in the update dictionary
+                        if "dynamic_data" not in update_dict:
+                            update_dict["dynamic_data"] = {}
+                        # Add the result to dynamic_data
+                        update_dict["dynamic_data"][child_key] = llm_response_str
+                        # Add last input/output to dynamic_data as well
+                        update_dict["dynamic_data"]["last_llm_input"] = formatted_prompt
+                        update_dict["dynamic_data"]["last_llm_output"] = llm_response_str
+                    else:
+                        logger.warning(f"Cannot set output to non-dynamic_data nested field '{output_key}'. Storing in 'final_answer'.")
+                        update_dict["final_answer"] = llm_response_str
+                    # Preserve dynamic_data to maintain subtask context
+                    update_dict["dynamic_data"] = state.dynamic_data.copy() if state.dynamic_data else {}
                 else:
-                     update_dict[output_key] = llm_response_str
+                    update_dict[output_key] = llm_response_str
+                    update_dict["dynamic_data"] = state.dynamic_data.copy() if state.dynamic_data else {}
 
             except Exception as e:
                 logger.error(f"Node '{self.node_id}': Error during simple LLM call: {e}", exc_info=True)

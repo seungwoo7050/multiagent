@@ -89,6 +89,7 @@
       "targets": {
         "process_complex_subtask": "process_complex_subtask",
         "process_simple_subtask": "process_simple_subtask",
+        "task_complexity_evaluator": "task_complexity_evaluator",
         "__end__": "__end__"
       },
       "default_target": "__end__"
@@ -111,6 +112,7 @@
         "continue": "process_complex_subtask",
         "finish": "subtask_processor"
       }
+      ,"default_target": "__end__"
     },
     {
       "type": "standard",

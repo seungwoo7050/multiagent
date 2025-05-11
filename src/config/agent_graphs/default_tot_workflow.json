@@ -54,6 +54,7 @@
         "continue": "thought_generator",
         "finish": "__end__"
       }
+      ,"default_target": "__end__"
     }
   ],
   "config": {

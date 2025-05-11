@@ -243,7 +243,7 @@ class SearchStrategyNode:
                         "current_best_thought_id": new_global_best_thought_id, # update_payload.get 대신 직접 사용
                         "current_best_score": state.get_thought_by_id(new_global_best_thought_id).evaluation_score
                             if new_global_best_thought_id and state.get_thought_by_id(new_global_best_thought_id) else None,
-                        "next_depth": next_search_depth if not should_terminate else state.search_depth, # update_payload.get 대신 직접 사용
+                        "next_depth": next_search_depth if not should_terminate else state.search_depth,
                         "final_answer_preview": (final_answer_content[:100]+"..." if final_answer_content else None),
                         "is_terminal": should_terminate
                     }
@@ -260,6 +260,11 @@ class SearchStrategyNode:
             )
 
             # --- 반환 페이로드 구성 시작 ---
+            logger.debug(
+                f"[Search-Strategy] task_id={state.task_id} "
+                f"depth={state.search_depth} decision={strategy_decision} "
+                f"next_action={next_action}"
+            )
             # 기존 dynamic_data를 기반으로 새로운 dynamic_data를 만듭니다.
             new_dynamic_data = state.dynamic_data.copy() if state.dynamic_data else {}
             # next_action은 그래프 라우팅을 위한 최상위 키로 사용됩니다.

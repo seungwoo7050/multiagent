@@ -67,6 +67,11 @@ class TaskDivisionTester:
                 original_input=test_input,
                 initial_metadata={"test_name": task_name}
             )
+            logger.debug(
+                f"[TEST] finished task_id={task_id} "
+                f"final_answer_present={bool(final_state.final_answer)} "
+                f"error={final_state.error_message}"
+            )
             
             if final_state:
                 print(f"\nFINAL ANSWER:\n{final_state.final_answer or 'No final answer produced'}\n")

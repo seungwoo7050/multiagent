@@ -222,6 +222,13 @@ class Orchestrator:
             is_dict = isinstance(state, dict)
 
             # 상태에서 값 가져오기 (타입 확인)
+            # ── DEBUG: 조건 키 해석 결과 확인 ──
+            logger.debug(
+                f"[Router] condition_key='{condition_key}', "
+                f"value_to_check='{value_to_check}', "
+                f"targets={list(targets_map.keys())}"
+            )
+            
             if is_dict:
                 state_dict = cast(Dict[str, Any], state) # 타입 캐스팅
                 if condition_key in state_dict:
@@ -249,7 +256,10 @@ class Orchestrator:
                 elif isinstance(getattr(state_obj,'metadata',{}), dict) and condition_key in state_obj.metadata:
                      value_to_check = state_obj.metadata.get(condition_key)
 
-            logger.debug(f"Conditional edge router: Checking key '{condition_key}', found value: {value_to_check} (input type: {type(state).__name__})")
+            logger.debug(
+                f"[Router] key='{condition_key}', "
+                f"value='{value_to_check}' (input type: {type(state).__name__})"
+            )
 
             # --- 이하 매핑 로직은 이전과 동일 ---
             decision = default_decision
@@ -309,6 +319,7 @@ class Orchestrator:
                 if edge_config.type == "standard":
                     target_node = END if edge_config.target == "__end__" else edge_config.target
                     graph.add_edge(edge_config.source, target_node)
+                    logger.debug(f"[Graph-Edge] {edge_config.source} → {target_node} (standard)")
                 elif edge_config.type == "conditional":
                     cond_edge_cfg = cast(ConditionalEdgeConfig, edge_config)
                     target_map = {k: (END if v == "__end__" else v) for k, v in cond_edge_cfg.targets.items()}
@@ -327,6 +338,10 @@ class Orchestrator:
                         cond_edge_cfg.source,
                         router_func,
                         possible_nodes
+                    )
+                    logger.debug(
+                        f"[Graph-CondEdge] {cond_edge_cfg.source} → {possible_nodes} "
+                        f"(condition='{cond_edge_cfg.condition_key}')"
                     )
 
 

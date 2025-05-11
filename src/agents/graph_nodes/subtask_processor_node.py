@@ -46,14 +46,17 @@ class SubtaskProcessorNode:
             )
 
             # Store the subtask result if one was produced
-            if state.final_answer and state.dynamic_data and "current_subtask" in state.dynamic_data:
+            if state.dynamic_data and "current_subtask" in state.dynamic_data:
                 current_subtask = state.dynamic_data["current_subtask"]
                 current_idx = state.dynamic_data.get("current_subtask_index", 0)
                 
                 # Store the result in the subtask
                 if "subtasks" in state.dynamic_data and current_idx < len(state.dynamic_data["subtasks"]):
                     state.dynamic_data["subtasks"][current_idx]["result"] = state.final_answer
-                    
+                    logger.debug(
+                        f"[SubtaskProc] task_id={state.task_id} "
+                        f"stored_result idx={current_idx}"
+                    )
                     logger.info(f"Node '{self.node_id}' (Task: {state.task_id}): Stored result for subtask {current_idx}")
                     
                     # Broadcast the result
@@ -71,7 +74,6 @@ class SubtaskProcessorNode:
                         )
                     )
             
-            # Move to the next subtask
             # Move to the next subtask
             if state.dynamic_data and "current_subtask_index" in state.dynamic_data:
                 current_idx = state.dynamic_data["current_subtask_index"]
@@ -124,6 +126,11 @@ class SubtaskProcessorNode:
                     )
                 )
                 
+                logger.debug(
+                    f"[SubtaskProc] task_id={state.task_id} "
+                    f"move_next idx={state.dynamic_data['current_subtask_index']} "
+                    f"next_action='task_complexity_evaluator'"
+                )
                 return {
                     "dynamic_data": state.dynamic_data,
                     "final_answer": None,  # Clear for next subtask
