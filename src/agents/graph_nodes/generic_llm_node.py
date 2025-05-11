@@ -190,9 +190,20 @@ class GenericLLMNode:
             # 1. 상태 객체 속성에서 직접 찾기
             if hasattr(state, key):
                 value = getattr(state, key)
-            # 2. dynamic_data 딕셔너리에서 찾기
-            elif hasattr(state, 'dynamic_data') and isinstance(state.dynamic_data, dict) and key in state.dynamic_data:
-                value = state.dynamic_data[key]
+            # 2. dynamic_data에서 점(.) 경로 지원
+            elif hasattr(state, 'dynamic_data') and isinstance(state.dynamic_data, dict):
+                if '.' in key:
+                    parts = key.split('.')
+                    val = state.dynamic_data
+                    for p in parts:
+                        if isinstance(val, dict) and p in val:
+                            val = val[p]
+                        else:
+                            val = None
+                            break
+                    value = val
+                elif key in state.dynamic_data:
+                    value = state.dynamic_data[key]
             # 3. metadata 딕셔너리에서 찾기
             elif hasattr(state, 'metadata') and isinstance(state.metadata, dict) and key in state.metadata:
                 value = state.metadata[key]

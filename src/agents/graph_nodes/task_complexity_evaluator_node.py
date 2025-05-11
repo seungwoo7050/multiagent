@@ -227,10 +227,11 @@ class TaskComplexityEvaluatorNode:
                         next_node=next_action
                     )
                 )
-                
+                current_desc = current_subtask.get("description", state.original_input)
                 return {
                     "dynamic_data": state.dynamic_data.copy() if state.dynamic_data else {},  # Create a copy to preserve dynamic_data
-                    "next_action": next_action
+                    "original_input": current_desc,
+                    "next_action": next_action,
                 }
 
             except Exception as e:
