@@ -104,6 +104,10 @@ class TaskComplexityEvaluatorNode:
         state: AgentGraphState,
         config: Optional[RunnableConfig] = None
     ) -> Dict[str, Any]:
+        if state.dynamic_data and "current_subtask_index" in state.dynamic_data:
+            idx = state.dynamic_data["current_subtask_index"]
+            state.dynamic_data["current_subtask"] = state.dynamic_data["subtasks"][idx]
+
         with tracer.start_as_current_span(
             "graph.node.task_complexity_evaluator",
             attributes={
@@ -258,6 +262,10 @@ class TaskComplexityEvaluatorNode:
                 
                 return {
                     "dynamic_data": state.dynamic_data,
-                    "error_message": error_message,
-                    "next_action": "task_complexity_evaluator"  # Loop back to evaluate the next subtask
+                    "final_answer": None,  # Clear for next subtask
+                    "thoughts": [],  # Clear thoughts
+                    "current_thoughts_to_evaluate": [],
+                    "current_best_thought_id": None,
+                    "search_depth": 0,
+                    "next_action": "task_complexity_evaluator"  # Return to evaluator for the next subtask
                 }

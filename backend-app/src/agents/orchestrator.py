@@ -45,6 +45,7 @@ REGISTERED_NODE_TYPES: Dict[str, Type[Any]] = {
     "task_division_node": TaskDivisionNode,
     "task_complexity_evaluator_node": TaskComplexityEvaluatorNode,
     "subtask_processor_node": SubtaskProcessorNode,
+    "result_evaluator_node": GenericLLMNode,
 }
 
 
@@ -205,7 +206,6 @@ class Orchestrator:
 
 
     # --- _get_conditional_router_func, build_graph, get_compiled_graph, run_workflow 메서드는 이전과 동일하게 유지 ---
-    # ... (이전 답변의 나머지 Orchestrator 메서드 코드) ...
 
     def _get_conditional_router_func(
         self,

@@ -112,8 +112,12 @@ class SubtaskProcessorNode:
                 # If not all processed, increment index and continue
                 state.dynamic_data["current_subtask_index"] = current_idx + 1
                 
-                # Clear the final_answer for the next subtask
+                # Clear state for next subtask
                 state.final_answer = None
+                state.thoughts = []  # Clear thoughts from previous subtask
+                state.current_thoughts_to_evaluate = []
+                state.current_best_thought_id = None  # Reset best thought for next subtask
+                state.search_depth = 0  # Reset search depth
                 
                 await self.notification_service.broadcast_to_task(
                     state.task_id,
@@ -134,6 +138,10 @@ class SubtaskProcessorNode:
                 return {
                     "dynamic_data": state.dynamic_data,
                     "final_answer": None,  # Clear for next subtask
+                    "thoughts": [],  # Clear thoughts
+                    "current_thoughts_to_evaluate": [],
+                    "current_best_thought_id": None,
+                    "search_depth": 0,
                     "next_action": "task_complexity_evaluator"  # Return to evaluator for the next subtask
                 }
             

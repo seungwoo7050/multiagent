@@ -215,6 +215,7 @@ class GenericLLMNode:
                     if isinstance(val, dict) and p in val:
                         val = val[p]
                     else:
+                        logger.warning(f"Path {key} could not be resolved. Part '{p}' not found in {type(val).__name__}")
                         val = None
                         break
                 value = val
@@ -341,6 +342,11 @@ class GenericLLMNode:
                     **llm_params
                 )
                 logger.debug(f"Node '{self.node_id}': LLM raw response (tools disabled): {llm_response_str[:200]}...")
+                
+                if "current_subtask" in state.dynamic_data and self.node_id == "initial_responder_subtask":
+                    # Pass the subtask description and answer to the state for the result_evaluator_node
+                    state.subtask_description = state.dynamic_data["current_subtask"].get("description", "")
+                    state.subtask_answer = llm_response_str
 
                 # 결과 저장
                 update_dict: Dict[str, Any] = {
@@ -348,24 +354,39 @@ class GenericLLMNode:
                     "last_llm_input": formatted_prompt,   # <-- 추가
                     "last_llm_output": llm_response_str   # <-- 추가
                 }
+                
+                if hasattr(state, "subtask_description"):
+                    update_dict["subtask_description"] = state.subtask_description
+                if hasattr(state, "subtask_answer"):
+                    update_dict["subtask_answer"] = state.subtask_answer
                 output_key = self.output_field_name or "final_answer"
 
                 if '.' in output_key:
-                    parent_key, child_key = output_key.split('.', 1)
+                    parts = output_key.split('.')
+                    parent_key = parts[0]
                     if parent_key == "dynamic_data":
-                        # Ensure dynamic_data exists in the update dictionary
-                        if "dynamic_data" not in update_dict:
-                            update_dict["dynamic_data"] = {}
-                        # Add the result to dynamic_data
-                        update_dict["dynamic_data"][child_key] = llm_response_str
+                        update_dict["dynamic_data"] = state.dynamic_data.copy() if state.dynamic_data else {}
+
+                        if len(parts) > 2:  # Handle nested paths like "dynamic_data.current_subtask.final_answer"
+                            current = update_dict["dynamic_data"]
+                            # Navigate and create nested structure if needed
+                            for part in parts[1:-1]:  # All parts except first and last
+                                if part not in current or not isinstance(current[part], dict):
+                                    current[part] = {}
+                                current = current[part]
+                            # Set value at the final level
+                            current[parts[-1]] = llm_response_str
+                        else:  # Simple case like "dynamic_data.field"
+                            child_key = parts[1]
+                            update_dict["dynamic_data"][child_key] = llm_response_str
                         # Add last input/output to dynamic_data as well
                         update_dict["dynamic_data"]["last_llm_input"] = formatted_prompt
                         update_dict["dynamic_data"]["last_llm_output"] = llm_response_str
                     else:
                         logger.warning(f"Cannot set output to non-dynamic_data nested field '{output_key}'. Storing in 'final_answer'.")
                         update_dict["final_answer"] = llm_response_str
-                    # Preserve dynamic_data to maintain subtask context
-                    update_dict["dynamic_data"] = state.dynamic_data.copy() if state.dynamic_data else {}
+                        # Preserve dynamic_data
+                        update_dict["dynamic_data"] = state.dynamic_data.copy() if state.dynamic_data else {}
                 else:
                     update_dict[output_key] = llm_response_str
                     update_dict["dynamic_data"] = state.dynamic_data.copy() if state.dynamic_data else {}
@@ -656,9 +677,21 @@ class GenericLLMNode:
         output_key = self.output_field_name or "final_answer"
 
         if '.' in output_key:
-            parent_key, child_key = output_key.split('.', 1)
+            parts = output_key.split('.')
+            parent_key = parts[0]
             if parent_key == "dynamic_data":
-                final_state_update["dynamic_data"][child_key] = final_output_value
+                if len(parts) > 2:  # Handle nested paths like "dynamic_data.current_subtask.final_answer"
+                    current = final_state_update["dynamic_data"]
+                    # Navigate and create nested structure if needed
+                    for part in parts[1:-1]:  # All parts except first and last
+                        if part not in current or not isinstance(current[part], dict):
+                            current[part] = {}
+                        current = current[part]
+                    # Set value at the final level
+                    current[parts[-1]] = final_output_value
+                else:  # Simple case like "dynamic_data.field"
+                    child_key = parts[1]
+                    final_state_update["dynamic_data"][child_key] = final_output_value
             else:
                  logger.warning(f"Cannot set output to non-dynamic_data nested field '{output_key}'. Storing in 'final_answer'.")
                  final_state_update["final_answer"] = final_output_value

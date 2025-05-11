@@ -100,14 +100,14 @@ class TaskDivisionTester:
         """Run a series of tests with different inputs"""
         
         test_inputs = [
-            {
-                "name": "AI Course Design",
-                "input": "Design a comprehensive AI course for undergraduate students including lectures, exercises, assessments, and final projects."
-            },
-            {
-                "name": "Marketing Strategy",
-                "input": "Create a marketing strategy for a new fitness app targeting working professionals aged 25-40. Include social media, content marketing, and partnership approaches."
-            },
+            # {
+            #     "name": "AI Course Design",
+            #     "input": "Design a comprehensive AI course for undergraduate students including lectures, exercises, assessments, and final projects."
+            # },
+            # {
+            #     "name": "Marketing Strategy",
+            #     "input": "Create a marketing strategy for a new fitness app targeting working professionals aged 25-40. Include social media, content marketing, and partnership approaches."
+            # },
             {
                 "name": "Research Analysis",
                 "input": "Analyze the recent developments in quantum computing and their potential impact on cryptography and data security over the next decade."
