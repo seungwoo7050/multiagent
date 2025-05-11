@@ -152,9 +152,13 @@ class TaskDivisionTester:
             #     "name": "AI Course Design",
             #     "input": "Design a comprehensive AI course for undergraduate students including lectures, exercises, assessments, and final projects."
             # },
+            # {
+            #     "name": "Marketing Strategy",
+            #     "input": "Create a marketing strategy for a new fitness app targeting working professionals aged 25-40. Include social media, content marketing, and partnership approaches."
+            # },
             {
-                "name": "Marketing Strategy",
-                "input": "Create a marketing strategy for a new fitness app targeting working professionals aged 25-40. Include social media, content marketing, and partnership approaches."
+                "name": "a casual greeting",
+                "input": "Hello! How are you doing today? I hope you're having a great day!"
             },
             # {
             #     "name": "Research Analysis",
