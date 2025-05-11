@@ -1,6 +1,6 @@
 {
   "name": "TaskDivisionWorkflow",
-  "description": "A workflow that divides a task into subtasks, evaluates their complexity, and processes each with the appropriate method.",
+  "description": "A workflow that divides a task into subtasks, evaluates their complexity, processes each with the appropriate method, and synthesizes the results.",
   "entry_point": "task_divider",
   "nodes": [
     {
@@ -96,6 +96,15 @@
       "parameters": {
         "node_id": "subtask_result_processor"
       }
+    },
+    {
+      "id": "synthesis_node",
+      "node_type": "synthesis_node",
+      "parameters": {
+        "temperature": 0.7,
+        "max_tokens": 1000,
+        "node_id": "final_synthesis"
+      }
     }
   ],
   "edges": [
@@ -133,8 +142,8 @@
       "targets": {
         "continue": "process_complex_subtask",
         "finish": "subtask_processor"
-      }
-      ,"default_target": "__end__"
+      },
+      "default_target": "__end__"
     },
     {
       "type": "standard",
@@ -157,9 +166,14 @@
       "condition_key": "next_action",
       "targets": {
         "task_complexity_evaluator": "task_complexity_evaluator",
-        "__end__": "__end__"
+        "__end__": "synthesis_node"
       },
-      "default_target": "__end__"
+      "default_target": "synthesis_node"
+    },
+    {
+      "type": "standard",
+      "source": "synthesis_node",
+      "target": "__end__"
     }
   ],
   "config": {

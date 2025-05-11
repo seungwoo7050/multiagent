@@ -95,6 +95,54 @@ class TaskDivisionTester:
             logger.error(f"Error running workflow: {e}", exc_info=True)
             print(f"\nERROR: Exception during workflow: {str(e)}")
             return task_id
+    # Add this to your test.py to verify the synthesis functionality
+
+    # This test will show the subtask results AND synthesized result
+    async def run_workflow_and_show_synthesis(self, task_name: str, test_input: str) -> str:
+        """Run workflow and display both individual results and synthesis"""
+        task_id = f"taskdiv-{uuid.uuid4()}"
+        
+        print(f"\n{'='*80}")
+        print(f"TESTING TASK DIVISION WITH SYNTHESIS: {task_name}")
+        print(f"Task ID: {task_id}")
+        print(f"{'='*80}")
+        print(f"INPUT:\n{test_input}\n")
+        print("Starting workflow execution...\n")
+        
+        try:
+            # Run the workflow
+            final_state = await self.orchestrator.run_workflow(
+                graph_config_name="task_division_workflow",
+                task_id=task_id,
+                original_input=test_input,
+                initial_metadata={"test_name": task_name}
+            )
+            
+            if final_state:
+                # Display subtask results
+                print("\n----- INDIVIDUAL SUBTASK RESULTS -----")
+                if hasattr(final_state, 'dynamic_data') and final_state.dynamic_data and "subtasks" in final_state.dynamic_data:
+                    subtasks = final_state.dynamic_data["subtasks"]
+                    for i, subtask in enumerate(subtasks):
+                        print(f"\nSubtask {i+1}: {subtask.get('title', 'Untitled')}")
+                        print(f"Result: {subtask.get('result', 'No result')[:150]}...")
+                
+                # Display synthesized result
+                print("\n----- SYNTHESIZED FINAL ANSWER -----")
+                print(f"\n{final_state.final_answer or 'No final answer produced'}\n")
+                
+                if final_state.error_message:
+                    print(f"ERROR: {final_state.error_message}")
+                    
+            else:
+                print("\nERROR: No final state returned")
+                
+            return task_id
+            
+        except Exception as e:
+            logger.error(f"Error running workflow: {e}", exc_info=True)
+            print(f"\nERROR: Exception during workflow: {str(e)}")
+            return task_id    
 
     async def run_tests(self):
         """Run a series of tests with different inputs"""
@@ -104,14 +152,14 @@ class TaskDivisionTester:
             #     "name": "AI Course Design",
             #     "input": "Design a comprehensive AI course for undergraduate students including lectures, exercises, assessments, and final projects."
             # },
-            # {
-            #     "name": "Marketing Strategy",
-            #     "input": "Create a marketing strategy for a new fitness app targeting working professionals aged 25-40. Include social media, content marketing, and partnership approaches."
-            # },
             {
-                "name": "Research Analysis",
-                "input": "Analyze the recent developments in quantum computing and their potential impact on cryptography and data security over the next decade."
-            }
+                "name": "Marketing Strategy",
+                "input": "Create a marketing strategy for a new fitness app targeting working professionals aged 25-40. Include social media, content marketing, and partnership approaches."
+            },
+            # {
+            #     "name": "Research Analysis",
+            #     "input": "Analyze the recent developments in quantum computing and their potential impact on cryptography and data security over the next decade."
+            # }
         ]
         
         for test in test_inputs:

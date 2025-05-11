@@ -32,6 +32,8 @@ from src.agents.graph_nodes.search_strategy_node import SearchStrategyNode
 from src.agents.graph_nodes.task_division_node import TaskDivisionNode
 from src.agents.graph_nodes.task_complexity_evaluator_node import TaskComplexityEvaluatorNode
 from src.agents.graph_nodes.subtask_processor_node import SubtaskProcessorNode
+from src.agents.graph_nodes.synthesis_node import SynthesisNode
+
 
 logger = get_logger(__name__)
 settings = get_settings()
@@ -46,6 +48,7 @@ REGISTERED_NODE_TYPES: Dict[str, Type[Any]] = {
     "task_complexity_evaluator_node": TaskComplexityEvaluatorNode,
     "subtask_processor_node": SubtaskProcessorNode,
     "result_evaluator_node": GenericLLMNode,
+    "synthesis_node": SynthesisNode,
 }
 
 

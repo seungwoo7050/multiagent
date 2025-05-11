@@ -345,8 +345,9 @@ class GenericLLMNode:
                 
                 if "current_subtask" in state.dynamic_data and self.node_id == "initial_responder_subtask":
                     # Pass the subtask description and answer to the state for the result_evaluator_node
-                    state.subtask_description = state.dynamic_data["current_subtask"].get("description", "")
-                    state.subtask_answer = llm_response_str
+                    update_dict["subtask_description"] = state.dynamic_data["current_subtask"].get("description", "")
+                    update_dict["subtask_answer"] = llm_response_str
+
 
                 # 결과 저장
                 update_dict: Dict[str, Any] = {
