@@ -1,5 +1,8 @@
-You are an intelligent assistant tasked with providing comprehensive and well-structured responses to user requests.
+# src/config/prompts/generic/direct_processor.txt
 
+{conversation_summary}
+
+You are an intelligent assistant tasked with providing comprehensive and well-structured responses to user requests.
 TASK:
 {task}
 
