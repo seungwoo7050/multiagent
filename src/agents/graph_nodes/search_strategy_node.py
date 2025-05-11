@@ -210,18 +210,21 @@ class SearchStrategyNode:
                 "next_action": next_action
             }
             
-            # 종료 조건별 특수 처리
+            # Update state and create return payload
             if should_terminate:
                 final_answer = final_answer_content
                 
-                # 최종 답변 개선 - 원래 질문에 맞게 포맷팅
+                # Improve final answer formatting for the original question
                 if state.original_input and isinstance(final_answer, str):
                     if not final_answer.startswith("Based on") and not final_answer.startswith("Regarding"):
                         final_answer = f"Based on your request: '{state.original_input}', here is my solution:\n\n{final_answer}"
                 
                 update_payload["search_depth"] = state.search_depth if strategy_decision == "finish_high_score" else next_search_depth
-                update_payload["error_message"] = None  # 오류가 아닌 정상 종료로 처리
+                update_payload["error_message"] = None  # Normal termination, not an error
                 update_payload["final_answer"] = final_answer
+                
+                # Critical fix: preserve dynamic_data to maintain subtask processing context
+                update_payload["dynamic_data"] = state.dynamic_data.copy() if state.dynamic_data else {}
             else:
                 update_payload["search_depth"] = next_search_depth
                 update_payload["final_answer"] = None
@@ -268,10 +271,11 @@ class SearchStrategyNode:
 
             # 핵심 반환 필드 초기화
             final_update_payload: Dict[str, Any] = {
-                "thoughts": state.thoughts, # 현재까지의 모든 생각들 (이 노드에서 수정되지 않았으므로 그대로 전달)
+                "thoughts": state.thoughts, 
                 "current_best_thought_id": new_global_best_thought_id,
-                "next_action": next_action, # ToT 루프를 계속할지('continue'), 아니면 현재 하위 작업 처리를 끝낼지('finish') 결정
-                "error_message": None # 기본적으로 에러 없음으로 시작
+                "next_action": next_action, 
+                "error_message": None,
+                "dynamic_data": state.dynamic_data.copy() if state.dynamic_data else {}  # Critical fix: preserve dynamic_data
             }
 
             if should_terminate:
