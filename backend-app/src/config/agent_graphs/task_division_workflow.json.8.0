@@ -1,28 +1,8 @@
 {
   "name": "TaskDivisionWorkflow",
-  "description": "A workflow that evaluates task complexity and either processes directly or divides into subtasks",
-  "entry_point": "complexity_router",
+  "description": "A workflow that divides a task into subtasks, evaluates their complexity, processes each with the appropriate method, and synthesizes the results.",
+  "entry_point": "task_divider",
   "nodes": [
-    {
-      "id": "complexity_router",
-      "node_type": "task_complexity_router_node",
-      "parameters": {
-        "complexity_threshold": 0.65,
-        "temperature": 0.3,
-        "prompt_template_path": "generic/task_complexity_router.txt",
-        "node_id": "task_complexity_router_node"
-      }
-    },
-    {
-      "id": "direct_processor",
-      "node_type": "direct_processor_node",
-      "parameters": {
-        "temperature": 0.7,
-        "max_tokens": 2000,
-        "prompt_template_path": "generic/direct_processor.txt",
-        "node_id": "direct_processor_node"
-      }
-    },
     {
       "id": "task_divider",
       "node_type": "task_division_node",
@@ -69,7 +49,7 @@
       "node_type": "search_strategy_node",
       "parameters": {
         "beam_width": 2,
-        "score_threshold_to_finish": 0.6,
+        "score_threshold_to_finish": 0.7,
         "min_score_to_continue": 0.1,
         "node_id": "ToT_Strategy_Subtask"
       }
@@ -99,15 +79,15 @@
         "output_field_name": "next_action",
         "input_keys_for_prompt": [
           "original_input",
-          "dynamic_data.current_subtask.description", 
-          "dynamic_data.current_subtask.final_answer",
+          "subtask_description",
+          "subtask_answer",
           "score_threshold"
         ],
         "max_tokens": 60,
         "model_name": null,
         "temperature": 0.1,
         "node_id": "result_evaluator_node",
-        "score_threshold": 0.6
+        "score_threshold": 0.7
       }
     },
     {
@@ -128,20 +108,6 @@
     }
   ],
   "edges": [
-    {
-      "type": "conditional",
-      "source": "complexity_router",
-      "condition_key": "next_action",
-      "targets": {
-        "process_simple_task": "direct_processor",
-        "process_complex_task": "task_divider"
-      }
-    },
-    {
-      "type": "standard",
-      "source": "direct_processor",
-      "target": "__end__"
-    },
     {
       "type": "standard",
       "source": "task_divider",
@@ -211,7 +177,7 @@
     }
   ],
   "config": {
-    "recursion_limit": 20,
+    "recursion_limit": 100,
     "max_search_depth": 5
   }
 }

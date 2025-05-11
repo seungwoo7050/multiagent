@@ -195,19 +195,57 @@ class GenericLLMNode:
             logger.error(f"Node '{self.node_id}': Failed to load conversation history: {e}", exc_info=True)
             return f"Error loading conversation history: {e}" # 오류 메시지를 프롬프트에 포함시킬 수 있음
 
+    # src/agents/graph_nodes/generic_llm_node.py에 추가할 수정 - _prepare_prompt_input 메서드
+
     async def _prepare_prompt_input(self, state: AgentGraphState) -> Dict[str, Any]:
-        prompt_input: Dict[str, Any] = {} # 명시적 타입 지정
-        # self.prompt_template.input_variables는 이미 set으로 중복 제거된 list 여야 함
+        prompt_input: Dict[str, Any] = {}
         all_expected_vars = self.prompt_template.input_variables
+        
+        # 특수 매핑 - 일반적으로 사용되는 키들과 중첩된 데이터 구조 간의 매핑
+        special_mappings = {
+            # 결과 평가기용 특수 매핑
+            "subtask_answer": ["dynamic_data.current_subtask.final_answer"],
+            "subtask_description": ["dynamic_data.current_subtask.description"],
+            "score_threshold": [] # 파라미터에서 직접 로드
+        }
 
         for key in all_expected_vars:
-            value: Any = None # value 타입 명시
+            value: Any = None
 
-            # 1. state 객체의 직접적인 속성에서 값 가져오기 시도
-            if hasattr(state, key):
+            # 1. node parameters에서 값 로드 시도 (score_threshold 등)
+            if key in self.__dict__:
+                value = self.__dict__[key]
+                logger.debug(f"Node '{self.node_id}': Using parameter value for '{key}'")
+            
+            # 2. state 객체의 직접적인 속성 확인
+            elif hasattr(state, key):
                 value = getattr(state, key)
-
-            # 2. 점(.) 표기법으로 중첩된 키 지원 (dynamic_data, metadata 우선)
+            
+            # 3. 특수 매핑 확인 - 중첩된 경로 우선 시도
+            elif key in special_mappings:
+                for path in special_mappings[key]:
+                    if value is not None:
+                        break
+                    
+                    if '.' in path:
+                        parts = path.split('.')
+                        # dynamic_data로 시작하는 경우
+                        if parts[0] == 'dynamic_data' and isinstance(state.dynamic_data, dict):
+                            current = state.dynamic_data
+                            found = True
+                            
+                            for p in parts[1:]:
+                                if isinstance(current, dict) and p in current:
+                                    current = current[p]
+                                else:
+                                    found = False
+                                    break
+                            
+                            if found:
+                                value = current
+                                logger.debug(f"Node '{self.node_id}': Found '{key}' via special mapping path '{path}'")
+            
+            # 4. 점(.) 표기법으로 중첩된 키 지원 (기존 로직)
             elif '.' in key:
                 parts = key.split('.')
                 # dynamic_data.xxx.yyy...
@@ -237,19 +275,19 @@ class GenericLLMNode:
                         break
                 value = current_val
 
-            # 3. dynamic_data의 최상위 키에서 값 가져오기
+            # 5. dynamic_data의 최상위 키 확인
             elif isinstance(state.dynamic_data, dict) and key in state.dynamic_data:
                 value = state.dynamic_data[key]
 
-            # 4. metadata의 최상위 키에서 값 가져오기
+            # 6. metadata의 최상위 키 확인
             elif isinstance(state.metadata, dict) and key in state.metadata:
                 value = state.metadata[key]
 
-            # 5. 특별 처리 키들 (히스토리, 요약, 도구 목록 등)
+            # 7. 특별 처리 키들 (히스토리, 요약, 도구 목록 등)
             # 일반 대화 기록
             if key == self.history_prompt_key and self.history_key_prefix: # history_prompt_key가 None이 아닐 때만
                 value = await self._load_conversation_history(state)
-            # --- [추가] 요약된 대화 내용 가져오기 ---
+            # --- 요약된 대화 내용 가져오기 ---
             elif key == self.summary_prompt_key and self.summary_prompt_key: # summary_prompt_key가 None이 아닐 때만
                 if state.dynamic_data and isinstance(state.dynamic_data.get(self.summary_prompt_key), str):
                     value = state.dynamic_data[self.summary_prompt_key]
@@ -258,7 +296,6 @@ class GenericLLMNode:
                     # Orchestrator에서 주입하지 않았거나, dynamic_data에 없는 경우
                     value = "No conversation summary available for this turn." # 또는 빈 문자열
                     logger.debug(f"Node '{self.node_id}': '{self.summary_prompt_key}' not found in dynamic_data or not a string. Using default.")
-            # --- [추가 끝] ---
             # 도구 사용 관련
             elif self.enable_tool_use:
                 if key == 'available_tools':
@@ -274,21 +311,21 @@ class GenericLLMNode:
                 elif key == 'scratchpad':
                     value = state.scratchpad if state.scratchpad is not None else "" # state.scratchpad 직접 사용
 
-            # 6. 값이 없으면 기본값 (빈 문자열)으로 설정
+            # 8. 값이 없으면 기본값 (빈 문자열)으로 설정
             if value is None:
                 # input_keys_for_prompt는 명시적으로 채워져야 하는 키들
                 if key in self.input_keys_for_prompt or \
-                   (key == self.history_prompt_key and self.history_prompt_key) or \
-                   (key == self.summary_prompt_key and self.summary_prompt_key): # 요약 키도 로그 대상
+                (key == self.history_prompt_key and self.history_prompt_key) or \
+                (key == self.summary_prompt_key and self.summary_prompt_key): # 요약 키도 로그 대상
                     logger.warning(f"Node '{self.node_id}': Key '{key}' required for prompt (from input_keys, history, or summary) was not found or resolved to None; using empty string.")
                 prompt_input[key] = ""
             elif isinstance(value, (list, dict)) and key != 'messages': # 'messages'는 보통 특별 처리됨
-                 try:
-                     # 복잡한 객체는 JSON 문자열로 변환하여 프롬프트에 주입
-                     prompt_input[key] = json.dumps(value, indent=2, ensure_ascii=False, default=str)
-                 except TypeError:
-                     logger.warning(f"Node '{self.node_id}': Could not JSON serialize value for key '{key}' (type: {type(value).__name__}). Using str().")
-                     prompt_input[key] = str(value) # 최후의 수단
+                try:
+                    # 복잡한 객체는 JSON 문자열로 변환하여 프롬프트에 주입
+                    prompt_input[key] = json.dumps(value, indent=2, ensure_ascii=False, default=str)
+                except TypeError:
+                    logger.warning(f"Node '{self.node_id}': Could not JSON serialize value for key '{key}' (type: {type(value).__name__}). Using str().")
+                    prompt_input[key] = str(value) # 최후의 수단
             else:
                 prompt_input[key] = str(value) # 모든 값을 문자열로 변환 (LLM 프롬프트는 보통 문자열)
 

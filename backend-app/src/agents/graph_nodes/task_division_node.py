@@ -23,7 +23,7 @@ class TaskDivisionNode:
         self,
         llm_client: LLMClient,
         notification_service: NotificationService,
-        max_subtasks: int = 5,
+        max_subtasks: int = 4,
         min_subtasks: int = 2,
         temperature: float = 0.7,
         prompt_template_path: Optional[str] = "generic/task_division.txt",

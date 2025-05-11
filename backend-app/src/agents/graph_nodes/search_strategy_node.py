@@ -131,23 +131,47 @@ class SearchStrategyNode:
             elif isinstance(state.metadata, dict) and 'recursion_limit' in state.metadata:
                 recursion_limit = state.metadata['recursion_limit']
             
-            if next_search_depth >= 10:  # Reasonable cap
-                logger.warning(f"Node '{self.node_id}' (Task: {state.task_id}): Hard safety cap reached. Forcing termination.")
+            # [수정] 매우 높은 점수에 대한 즉각 종료 처리 - 최소 탐색 깊이 조건보다 우선 적용
+            if current_round_best_thought.evaluation_score is not None and current_round_best_thought.evaluation_score >= 0.85:
+                logger.warning(f"Node '{self.node_id}' (Task: {state.task_id}): Very high score ({current_round_best_thought.evaluation_score}) detected. Forcing termination despite depth.")
+                should_terminate = True
+                final_answer_content = current_round_best_thought.content
+                strategy_decision = "finish_very_high_score"
+                next_node_for_ws = None
+                next_action = "finish"
+            
+            # 점수 개선 없음 추적 로직
+            no_improvement_count = 0
+            if not should_terminate and isinstance(state.dynamic_data, dict):
+                no_improvement_count = state.dynamic_data.get('no_improvement_count', 0)
+                prev_best_score = state.dynamic_data.get('prev_best_score', 0)
+                
+                if best_across_all and best_across_all.evaluation_score is not None:
+                    if best_across_all.evaluation_score <= prev_best_score:
+                        no_improvement_count += 1
+                    else:
+                        no_improvement_count = 0  # 점수 개선 시 카운터 리셋
+                        state.dynamic_data['prev_best_score'] = best_across_all.evaluation_score
+                state.dynamic_data['no_improvement_count'] = no_improvement_count
+
+            # 정체 카운터가 3 이상이면 강제 종료 (점수 기반 종료 조건)
+            if not should_terminate and no_improvement_count >= 3 and state.search_depth >= 2:
+                logger.warning(f"Node '{self.node_id}' (Task: {state.task_id}): No score improvement for 3 iterations. Forcing termination.")
                 should_terminate = True
                 final_thought_to_use = best_across_all or current_round_best_thought
-                final_answer_content = final_thought_to_use.content if final_thought_to_use else "Search stopped due to safety cap."
-                strategy_decision = "finish_safety_cap"
+                final_answer_content = final_thought_to_use.content if final_thought_to_use else "Search stopped due to no progress."
+                strategy_decision = "finish_no_improvement"
                 next_node_for_ws = None
                 next_action = "finish"
             
             # 1. 최소 탐색 깊이 체크 - 너무 일찍 종료되지 않도록
-            if state.search_depth < self.min_depth_before_finish:
+            if not should_terminate and state.search_depth < self.min_depth_before_finish:
                 logger.info(f"Node '{self.node_id}' (Task: {state.task_id}): Continuing search as minimum depth {self.min_depth_before_finish} not yet reached.")
                 strategy_decision = "continue_min_depth"
                 next_action = "continue"
             
             # 2. 반복 제한 확인
-            elif next_search_depth >= recursion_limit:
+            elif not should_terminate and next_search_depth >= recursion_limit:
                 logger.warning(f"Node '{self.node_id}' (Task: {state.task_id}): Recursion limit ({recursion_limit}) nearly reached. Forcing termination.")
                 should_terminate = True
                 final_thought_to_use = best_across_all or current_round_best_thought
@@ -157,7 +181,7 @@ class SearchStrategyNode:
                 next_action = "finish"
             
             # 3. 사용자 지정 max_search_depth 확인
-            elif next_search_depth >= state.max_search_depth:
+            elif not should_terminate and next_search_depth >= state.max_search_depth:
                 logger.info(f"Node '{self.node_id}' (Task: {state.task_id}): Max search depth ({state.max_search_depth}) reached.")
                 should_terminate = True
                 final_thought_to_use = best_across_all or current_round_best_thought
@@ -167,7 +191,7 @@ class SearchStrategyNode:
                 next_action = "finish"
             
             # 4. 높은 점수 찾음 - 대부분의 성공 케이스
-            elif current_round_best_thought.evaluation_score is not None and \
+            elif not should_terminate and current_round_best_thought.evaluation_score is not None and \
                 current_round_best_thought.evaluation_score >= self.score_threshold_to_finish:
                 logger.info(f"Node '{self.node_id}' (Task: {state.task_id}): High-confidence thought found (Score: {current_round_best_thought.evaluation_score}). Finalizing.")
                 should_terminate = True
@@ -177,9 +201,9 @@ class SearchStrategyNode:
                 next_action = "finish"
 
             # 5. 지금까지의 최고 점수가 threshold의 85%는 되는데 탐색이 일정 깊이 진행됐을 경우
-            elif best_across_all and best_across_all.evaluation_score is not None and \
-                 best_across_all.evaluation_score >= (self.score_threshold_to_finish * 0.85) and \
-                 state.search_depth >= 3:
+            elif not should_terminate and best_across_all and best_across_all.evaluation_score is not None and \
+                    best_across_all.evaluation_score >= (self.score_threshold_to_finish * 0.85) and \
+                    state.search_depth >= 3:
                 logger.info(f"Node '{self.node_id}' (Task: {state.task_id}): Decent solution found after sufficient exploration (Score: {best_across_all.evaluation_score}). Finalizing.")
                 should_terminate = True
                 final_answer_content = best_across_all.content
@@ -188,7 +212,7 @@ class SearchStrategyNode:
                 next_action = "finish"
 
             # 6. 점수가 낮아서 더 이상 탐색할 가치가 없는 경우
-            elif (state.search_depth >= 2) and all(t.evaluation_score is not None and t.evaluation_score < self.min_score_to_continue for t in top_thoughts_for_expansion):
+            elif not should_terminate and (state.search_depth >= 2) and all(t.evaluation_score is not None and t.evaluation_score < self.min_score_to_continue for t in top_thoughts_for_expansion):
                 logger.warning(f"Node '{self.node_id}' (Task: {state.task_id}): All top {self.beam_width} thoughts below threshold. Stopping.")
                 should_terminate = True
                 final_thought_to_use = best_across_all or current_round_best_thought
@@ -197,8 +221,8 @@ class SearchStrategyNode:
                 next_node_for_ws = None
                 next_action = "finish"
             
-            # 계속 탐색
-            else:
+            # 계속 탐색 (다른 종료 조건에 해당되지 않을 경우)
+            elif not should_terminate:
                 logger.info(f"Node '{self.node_id}' (Task: {state.task_id}): Proceeding to next search depth ({next_search_depth}). Best thought to expand based on: {new_global_best_thought_id}")
                 strategy_decision = "continue_search"
                 next_action = "continue"
@@ -230,9 +254,6 @@ class SearchStrategyNode:
                 update_payload["final_answer"] = None
 
             # 결정된 전략 알림
-            # ... (이전 로직은 동일하게 유지) ...
-
-            # 결정된 전략 알림
             await self.notification_service.broadcast_to_task(
                 state.task_id,
                 IntermediateResultMessage(
@@ -240,7 +261,7 @@ class SearchStrategyNode:
                     result_step_name="search_strategy_decision",
                     data={
                         "decision": strategy_decision,
-                        "current_best_thought_id": new_global_best_thought_id, # update_payload.get 대신 직접 사용
+                        "current_best_thought_id": new_global_best_thought_id,
                         "current_best_score": state.get_thought_by_id(new_global_best_thought_id).evaluation_score
                             if new_global_best_thought_id and state.get_thought_by_id(new_global_best_thought_id) else None,
                         "next_depth": next_search_depth if not should_terminate else state.search_depth,
@@ -259,60 +280,45 @@ class SearchStrategyNode:
                 )
             )
 
-            # --- 반환 페이로드 구성 시작 ---
+            # --- 반환 페이로드 구성 ---
             logger.debug(
                 f"[Search-Strategy] task_id={state.task_id} "
                 f"depth={state.search_depth} decision={strategy_decision} "
                 f"next_action={next_action}"
             )
-            # 기존 dynamic_data를 기반으로 새로운 dynamic_data를 만듭니다.
+            
             new_dynamic_data = state.dynamic_data.copy() if state.dynamic_data else {}
-            # next_action은 그래프 라우팅을 위한 최상위 키로 사용됩니다.
-            # dynamic_data 내부에 next_action을 중복 저장할 필요는 없습니다.
-            # new_dynamic_data["next_action"] = next_action # 이 줄은 보통 불필요
+            current_error_message_in_state = state.error_message
 
-            # 최종 반환할 update_payload를 구성합니다.
-            current_error_message_in_state = state.error_message # 상태에 이미 에러 메시지가 있었는지 확인
-
-            # 핵심 반환 필드 초기화
             final_update_payload: Dict[str, Any] = {
                 "thoughts": state.thoughts, 
                 "current_best_thought_id": new_global_best_thought_id,
                 "next_action": next_action, 
                 "error_message": None,
-                "dynamic_data": state.dynamic_data.copy() if state.dynamic_data else {}  # Critical fix: preserve dynamic_data
+                "dynamic_data": new_dynamic_data
             }
 
             if should_terminate:
-                final_update_payload["search_depth"] = state.search_depth # ToT가 종료된 시점의 깊이
-                final_update_payload["final_answer"] = final_answer_content # 현재 "하위 작업에 대한 ToT"의 최종 결과
+                final_update_payload["search_depth"] = state.search_depth
+                final_update_payload["final_answer"] = final_answer_content
                 
-                # 종료 사유에 따른 에러 메시지 설정 (선택적)
                 if strategy_decision == "finish_recursion_limit":
                     final_update_payload["error_message"] = "Search for subtask stopped due to recursion limit within ToT."
                 elif strategy_decision == "finish_max_depth":
                     final_update_payload["error_message"] = "Reached max search depth in ToT for subtask."
                 elif strategy_decision == "finish_low_score":
                     final_update_payload["error_message"] = "Stopping ToT for subtask due to consistently low scores."
-                # 성공적인 종료(예: finish_high_score) 시에는 error_message가 None으로 유지되거나, 명시적으로 설정하지 않음
-            
-            else: # ToT 루프 계속 (next_action == "continue")
-                final_update_payload["search_depth"] = next_search_depth # 다음 ToT 반복을 위한 증가된 깊이
-                final_update_payload["final_answer"] = None # 아직 하위 작업의 ToT가 끝나지 않음
+            else:
+                final_update_payload["search_depth"] = next_search_depth
+                final_update_payload["final_answer"] = None
 
-            # 이전 상태에 에러 메시지가 있었고, 이번 로직에서 새 에러를 설정하지 않았다면 기존 에러 유지
             if current_error_message_in_state and not final_update_payload.get("error_message"):
                 final_update_payload["error_message"] = current_error_message_in_state
-            
-            # 수정된 dynamic_data (만약 있다면)를 반환 페이로드에 포함
-            final_update_payload["dynamic_data"] = new_dynamic_data
             
             logger.info(
                 f"Node '{self.node_id}' (Task: {state.task_id}): Returning update. "
                 f"Subtask ToT Final Answer Present: {final_update_payload.get('final_answer') is not None}, "
-                f"Next Action for Graph Routing: {final_update_payload.get('next_action')}, "
-                f"Search Depth for Subtask ToT: {final_update_payload.get('search_depth')}, "
-                f"Error Message: {final_update_payload.get('error_message')}"
+                f"Next Action: {final_update_payload.get('next_action')}, "
+                f"Search Depth: {final_update_payload.get('search_depth')}"
             )
             return final_update_payload
-            # --- 반환 페이로드 구성 끝 ---

@@ -144,7 +144,7 @@ class SynthesisNode:
                 error_message = f"Error during synthesis: {str(e)}"
                 logger.error(f"Node '{self.node_id}' (Task: {state.task_id}): {error_message}", exc_info=True)
                 synthesis_result = f"An error occurred while synthesizing results: {str(e)}"
-
+                
             await self.notification_service.broadcast_to_task(
                 state.task_id,
                 StatusUpdateMessage(

@@ -434,7 +434,7 @@ class Orchestrator:
         task_id: str,
         original_input: Any, # 사용자의 현재 메시지
         initial_metadata: Optional[Dict[str, Any]] = None,
-        max_iterations: int = 15 # 기본값 유지
+        max_iterations: int = 100 # 기본값 유지
     ) -> AgentGraphState:
         # --- [수정 시작] ---
         # from src.utils.telemetry import _tracer_provider, _test_in_memory_exporter # 테스트 관련 코드는 그대로 둠

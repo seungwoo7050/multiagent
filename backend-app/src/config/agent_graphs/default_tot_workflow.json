@@ -29,7 +29,7 @@
       "node_type": "search_strategy_node",
       "parameters": {
         "beam_width": 2,
-        "score_threshold_to_finish": 0.7,
+        "score_threshold_to_finish": 0.6,
         "min_score_to_continue": 0.1,
         "node_id": "ToT_Strategy"
       }

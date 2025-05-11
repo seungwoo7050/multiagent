@@ -176,6 +176,39 @@ class TaskComplexityEvaluatorNode:
                 # Generate the prompt
                 evaluation_prompt = self._construct_prompt(current_subtask, state)
                 logger.debug(f"Node '{self.node_id}' (Task: {state.task_id}): Evaluation prompt constructed for subtask {current_idx}")
+                
+                retry_counts = state.dynamic_data.get("complexity_eval_retries", {})
+                subtask_id = str(current_idx)  # 딕셔너리 키로 사용하기 위해 문자열로 변환
+                retry_counts[subtask_id] = retry_counts.get(subtask_id, 0) + 1
+                state.dynamic_data["complexity_eval_retries"] = retry_counts
+                
+                # 재시도 횟수 초과 시 기본값으로 처리
+                if retry_counts[subtask_id] > 2:  # 최대 3번 시도 (초기 1번 + 재시도 2번)
+                    logger.warning(f"Node '{self.node_id}' (Task: {state.task_id}): Maximum retry attempts reached for subtask {current_idx}. Using default complexity.")
+                    # 기본값으로 '복잡함'으로 설정 - 보수적 접근
+                    subtasks[current_idx]["is_complex"] = True
+                    
+                    await self.notification_service.broadcast_to_task(
+                        task_id=state.task_id,
+                        message=IntermediateResultMessage(
+                            task_id=state.task_id,
+                            node_id=self.node_id,
+                            result_step_name="subtask_complexity_default",
+                            data={"subtask_index": current_idx, "default_complexity": "complex"}
+                        )
+                    )
+                    
+                    # 진행 계속
+                    next_action = "process_complex_subtask"
+                    
+                    # 현재 서브태스크 저장 및 반환
+                    state.dynamic_data["current_subtask"] = current_subtask
+                    return {
+                        "dynamic_data": state.dynamic_data.copy(),
+                        "original_input": current_subtask.get("description", state.original_input),
+                        "next_action": next_action,
+                    }
+
 
                 # Call the LLM to evaluate complexity
                 evaluation_response = await self.llm_client.generate_response(

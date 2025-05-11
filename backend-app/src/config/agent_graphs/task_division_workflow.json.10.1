@@ -69,7 +69,7 @@
       "node_type": "search_strategy_node",
       "parameters": {
         "beam_width": 2,
-        "score_threshold_to_finish": 0.6,
+        "score_threshold_to_finish": 0.7,
         "min_score_to_continue": 0.1,
         "node_id": "ToT_Strategy_Subtask"
       }
@@ -99,15 +99,15 @@
         "output_field_name": "next_action",
         "input_keys_for_prompt": [
           "original_input",
-          "dynamic_data.current_subtask.description", 
-          "dynamic_data.current_subtask.final_answer",
+          "subtask_description",
+          "subtask_answer",
           "score_threshold"
         ],
         "max_tokens": 60,
         "model_name": null,
         "temperature": 0.1,
         "node_id": "result_evaluator_node",
-        "score_threshold": 0.6
+        "score_threshold": 0.7
       }
     },
     {
@@ -211,7 +211,7 @@
     }
   ],
   "config": {
-    "recursion_limit": 20,
+    "recursion_limit": 100,
     "max_search_depth": 5
   }
 }
