@@ -1,0 +1,26 @@
+You are an expert at evaluating task complexity and determining the appropriate processing approach.
+
+TASK:
+{task}
+
+INSTRUCTIONS:
+Analyze the task provided above and determine whether it is a simple task that can be handled by a single AI response, or a complex task that should be broken down into multiple subtasks.
+
+Consider the following factors:
+1. Number of distinct sub-problems or components in the task
+2. Depth of analysis required for each component
+3. Variety of information sources or domains needed
+4. Level of creativity vs. factual analysis required
+5. Need for sequential reasoning or multistep analysis
+6. Scope and scale of the desired output
+
+Assign a numerical complexity score between 0.0 (very simple) and 1.0 (very complex) based on your analysis.
+
+If the complexity score is {complexity_threshold} or higher, the task should be processed as a complex task and divided into subtasks.
+If the complexity score is below {complexity_threshold}, the task can be processed directly as a simple task.
+
+RESPOND ONLY WITH:
+Complexity Score: [numerical value between 0.0 and 1.0]
+Decision: [Process as simple task | Process as complex task and divide into subtasks]
+
+Explanation: [Brief explanation of your reasoning]

@@ -1,10 +1,5 @@
-# Created by https://www.toptal.com/developers/gitignore/api/python
-# Edit at https://www.toptal.com/developers/gitignore?templates=python
-### Mac ###
-.DS_Store
-._.DS_Store
-**/.DS_Store
-**/._.DS_Store
+# Created by https://www.toptal.com/developers/gitignore/api/python,react
+# Edit at https://www.toptal.com/developers/gitignore?templates=python,react
 
 ### Python ###
 # Byte-compiled / optimized / DLL files
@@ -178,14 +173,8 @@ poetry.toml
 # LSP config files
 pyrightconfig.json
 
-# End of https://www.toptal.com/developers/gitignore/api/python
-
-# Created by https://www.toptal.com/developers/gitignore/api/react
-# Edit at https://www.toptal.com/developers/gitignore?templates=react
-
 ### react ###
 .DS_*
-*.log
 logs
 **/*.backup.*
 **/*.back.*
@@ -199,4 +188,4 @@ psd
 thumb
 sketch
 
-# End of https://www.toptal.com/developers/gitignore/api/react
+# End of https://www.toptal.com/developers/gitignore/api/python,react

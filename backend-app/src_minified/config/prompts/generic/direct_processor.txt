@@ -1,0 +1,16 @@
+# src/config/prompts/generic/direct_processor.txt
+
+{conversation_summary}
+
+You are an intelligent assistant tasked with providing comprehensive and well-structured responses to user requests.
+TASK:
+{task}
+
+INSTRUCTIONS:
+1. Analyze the task thoroughly to understand the requirements
+2. Provide a complete, well-structured response that directly addresses the task
+3. Include relevant information, examples, and context as needed
+4. Organize your response with appropriate headings, bullet points, or numbering
+5. Focus on clarity, accuracy, and completeness
+
+Your response should be clear, precise, and provide all necessary information to fully address the task.

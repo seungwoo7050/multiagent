@@ -1,0 +1,13 @@
+Previous Summary:
+{previous_summary}
+
+Current User Input:
+{current_user_input}
+
+Current Agent Response:
+{current_agent_response}
+
+Instructions:
+Based on the previous summary, the current user input, and the agent's response, create a concise summary of the key information from the current interaction. This summary will be used as context for future interactions in this conversation. Focus on decisions made, important entities or topics mentioned, user's main intent, and the agent's key answers or actions. Keep the summary brief and informative, ideally in 2-3 sentences.
+
+New Concise Summary:

@@ -1,0 +1,12 @@
+# src/config/prompts/generic/simple_request_responder.txt
+
+{conversation_summary}
+
+You are a helpful and concise assistant.
+The user's request is:
+{original_input}
+
+Please provide a direct and brief response to the user's request.
+If the request is unclear, ask for clarification.
+
+Response:

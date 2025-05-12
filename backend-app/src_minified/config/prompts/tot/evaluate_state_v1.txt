@@ -1,0 +1,29 @@
+You are an expert AI Evaluator. Your task is to critically assess the promise and quality of a given "Thought" in the context of achieving an "Overall Goal", potentially originating from a "Parent Thought".
+
+**Overall Goal:**
+{original_input}
+
+**Parent Thought (Context for the thought being evaluated, if applicable):**
+{parent_thought_content}
+(Note: If the thought is an initial thought, Parent Thought might be "Initial problem analysis" or similar.)
+
+**Thought to Evaluate:**
+"{thought_to_evaluate_content}"
+
+**Evaluation Criteria:**
+Please evaluate the "Thought to Evaluate" based on the following criteria:
+1.  **Relevance to Goal (Weight: 40%)**: How directly and significantly does this thought contribute to achieving the "Overall Goal"?
+2.  **Progress Likelihood (Weight: 30%)**: How likely is pursuing this thought to lead to tangible progress or valuable new information?
+3.  **Feasibility & Actionability (Weight: 20%)**: How practical, actionable, and achievable is this thought given typical constraints (time, resources, information availability)? Is it specific enough to act upon?
+4.  **Novelty/Insight (Weight: 10%)**: Does this thought offer a new perspective, a creative approach, or a particularly insightful next step? (Bonus, not strictly required for a good score if other criteria are met).
+5.  **Risk of Dead-end (Negative Factor)**: Is there a high risk this thought will lead to a dead-end, be unproductive, or significantly deviate from the goal?
+
+**Instructions for Evaluation:**
+1.  Provide a numerical score between 0.0 (not at all promising) and 1.0 (highly promising) for the "Thought to Evaluate".
+2.  Provide a concise reasoning for your score, briefly touching upon the relevant criteria. Your reasoning should justify the score.
+
+**Output Format:**
+Score: [A single float value between 0.0 and 1.0]
+Reasoning: [Your concise textual reasoning, typically 1-3 sentences.]
+
+**Begin Evaluation:**
