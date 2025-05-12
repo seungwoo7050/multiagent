@@ -4,13 +4,14 @@ from typing import Optional
 
 from src.config.settings import get_settings
 from src.utils.logger import get_logger
-from src.config.errors import ConnectionError, ErrorCode                         
+from src.config.errors import ConnectionError, ErrorCode
 
 logger = get_logger(__name__)
 settings = get_settings()
 
-                      
+
 _redis_pool: Optional[ConnectionPool] = None
+
 
 async def setup_connection_pools():
     """
@@ -23,33 +24,32 @@ async def setup_connection_pools():
         return
 
     try:
-        logger.info(f"Setting up Redis connection pool for URL: {settings.REDIS_URL} (DB: {settings.REDIS_DB})")
-                                                        
-                                                                                                  
+        logger.info(
+            f"Setting up Redis connection pool for URL: {settings.REDIS_URL} (DB: {settings.REDIS_DB})"
+        )
+
         _redis_pool = ConnectionPool.from_url(
             settings.REDIS_URL,
-                                                           
-                                                            
             max_connections=settings.REDIS_CONNECTION_POOL_SIZE,
-            decode_responses=False,                             
-            health_check_interval=30                   
+            decode_responses=False,
+            health_check_interval=30,
         )
-                    
+
         conn = aioredis.Redis(connection_pool=_redis_pool)
         await conn.ping()
-                                             
-                                  
+
         logger.info("Redis connection pool initialized and ping successful.")
     except Exception as e:
         logger.error(f"Failed to initialize Redis connection pool: {e}", exc_info=True)
-        _redis_pool = None                 
-                                           
+        _redis_pool = None
+
         raise ConnectionError(
             code=ErrorCode.REDIS_CONNECTION_ERROR,
             message=f"Failed to connect to Redis at {settings.REDIS_URL}: {e}",
             original_error=e,
-            service="redis"
+            service="redis",
         ) from e
+
 
 async def cleanup_connection_pools():
     """
@@ -60,7 +60,6 @@ async def cleanup_connection_pools():
     if _redis_pool:
         logger.info("Closing Redis connection pool...")
         try:
-                                          
             await _redis_pool.disconnect()
             _redis_pool = None
             logger.info("Redis connection pool closed.")
@@ -68,6 +67,7 @@ async def cleanup_connection_pools():
             logger.error(f"Error closing Redis connection pool: {e}", exc_info=True)
     else:
         logger.info("Redis connection pool was not initialized or already closed.")
+
 
 async def get_redis_async_connection() -> aioredis.Redis:
     """
@@ -83,21 +83,22 @@ async def get_redis_async_connection() -> aioredis.Redis:
     """
     global _redis_pool
     if _redis_pool is None:
-        logger.critical("Attempted to get Redis connection before the pool was initialized.")
+        logger.critical(
+            "Attempted to get Redis connection before the pool was initialized."
+        )
         raise RuntimeError(
             "Redis connection pool is not available. "
             "Ensure setup_connection_pools() is called during application startup."
         )
     try:
-                                                
-                                                                                            
         return aioredis.Redis(connection_pool=_redis_pool)
     except Exception as e:
-                            
-        logger.error(f"Failed to create Redis client instance from pool: {e}", exc_info=True)
+        logger.error(
+            f"Failed to create Redis client instance from pool: {e}", exc_info=True
+        )
         raise ConnectionError(
             code=ErrorCode.REDIS_CONNECTION_ERROR,
             message=f"Failed to get Redis connection from pool: {e}",
             original_error=e,
-            service="redis"
+            service="redis",
         ) from e

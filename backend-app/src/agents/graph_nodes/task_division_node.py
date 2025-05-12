@@ -17,6 +17,7 @@ tracer = trace.get_tracer(__name__)
 logger = get_logger(__name__)
 settings = get_settings()
 
+
 class TaskDivisionNode:
     def __init__(
         self,
@@ -27,7 +28,7 @@ class TaskDivisionNode:
         temperature: float = 0.7,
         prompt_template_path: Optional[str] = "generic/task_division.txt",
         model_name: Optional[str] = None,
-        node_id: str = "task_divider"
+        node_id: str = "task_divider",
     ):
         self.llm_client = llm_client
         self.notification_service = notification_service
@@ -47,20 +48,26 @@ class TaskDivisionNode:
     def _load_prompt_template_if_path_exists(self) -> Optional[str]:
         if not self.prompt_template_path:
             return None
-        base_prompt_dir = getattr(settings, 'PROMPT_TEMPLATE_DIR', 'config/prompts')
+        base_prompt_dir = getattr(settings, "PROMPT_TEMPLATE_DIR", "config/prompts")
         if os.path.isabs(self.prompt_template_path):
             full_path = self.prompt_template_path
         else:
             full_path = os.path.join(base_prompt_dir, self.prompt_template_path)
         try:
-            with open(full_path, 'r', encoding='utf-8') as f:
-                logger.debug(f"Successfully loaded prompt template from: {full_path} for node '{self.node_id}'")
+            with open(full_path, "r", encoding="utf-8") as f:
+                logger.debug(
+                    f"Successfully loaded prompt template from: {full_path} for node '{self.node_id}'"
+                )
                 return f.read()
         except FileNotFoundError:
-            logger.warning(f"Prompt template file not found for TaskDivisionNode '{self.node_id}': {full_path}. Using default internal prompt.")
+            logger.warning(
+                f"Prompt template file not found for TaskDivisionNode '{self.node_id}': {full_path}. Using default internal prompt."
+            )
             return None
         except Exception as e:
-            logger.error(f"Error loading prompt template from {full_path} for node '{self.node_id}': {e}. Using default internal prompt.")
+            logger.error(
+                f"Error loading prompt template from {full_path} for node '{self.node_id}': {e}. Using default internal prompt."
+            )
             return None
 
     def _construct_prompt(self, state: AgentGraphState) -> str:
@@ -71,12 +78,16 @@ class TaskDivisionNode:
                     "max_subtasks": self.max_subtasks,
                     "min_subtasks": self.min_subtasks,
                 }
-                template = PromptTemplate(template=self.prompt_template_str, input_variables=list(prompt_data.keys()))
+                template = PromptTemplate(
+                    template=self.prompt_template_str,
+                    input_variables=list(prompt_data.keys()),
+                )
                 return template.format(**prompt_data)
             except Exception as e:
-                logger.error(f"Error formatting prompt template in TaskDivisionNode '{self.node_id}': {e}. Falling back to default internal prompt.")
+                logger.error(
+                    f"Error formatting prompt template in TaskDivisionNode '{self.node_id}': {e}. Falling back to default internal prompt."
+                )
 
-                                                           
         return f"""
         You are a task breakdown specialist. Your job is to divide a complex task into smaller, more manageable subtasks.
 
@@ -99,132 +110,148 @@ class TaskDivisionNode:
 
     def _parse_subtasks(self, response: str) -> List[Dict[str, Any]]:
         """Parse LLM response to extract subtasks."""
-        lines = response.strip().split('\n')
+        lines = response.strip().split("\n")
         subtasks = []
         current_subtask = None
-        
+
         for line in lines:
             line = line.strip()
             if not line:
                 continue
-                
-                                      
-            if line.lower().startswith("subtask #") or line.lower().startswith("subtask:"):
-                                                    
-                if current_subtask and 'title' in current_subtask and 'description' in current_subtask:
+
+            if line.lower().startswith("subtask #") or line.lower().startswith(
+                "subtask:"
+            ):
+                if (
+                    current_subtask
+                    and "title" in current_subtask
+                    and "description" in current_subtask
+                ):
                     subtasks.append(current_subtask)
-                
-                                     
-                title_part = line.split(':', 1)[1].strip() if ':' in line else ""
+
+                title_part = line.split(":", 1)[1].strip() if ":" in line else ""
                 current_subtask = {
-                    'id': str(uuid.uuid4()),
-                    'title': title_part,
-                    'description': "",
-                    'is_complex': None                                                  
+                    "id": str(uuid.uuid4()),
+                    "title": title_part,
+                    "description": "",
+                    "is_complex": None,
                 }
-            
-                                  
+
             elif current_subtask and line.lower().startswith("description:"):
-                current_subtask['description'] = line.split(':', 1)[1].strip()
-            
-                                            
-            elif current_subtask and 'description' in current_subtask and current_subtask['description']:
-                current_subtask['description'] += " " + line
-            
-                                                        
-            elif current_subtask and not current_subtask['description']:
-                if not current_subtask['title']:                                              
-                    current_subtask['title'] = line
-                else:                                    
-                    current_subtask['description'] = line
-        
-                                           
-        if current_subtask and 'title' in current_subtask and 'description' in current_subtask:
+                current_subtask["description"] = line.split(":", 1)[1].strip()
+
+            elif (
+                current_subtask
+                and "description" in current_subtask
+                and current_subtask["description"]
+            ):
+                current_subtask["description"] += " " + line
+
+            elif current_subtask and not current_subtask["description"]:
+                if not current_subtask["title"]:
+                    current_subtask["title"] = line
+                else:
+                    current_subtask["description"] = line
+
+        if (
+            current_subtask
+            and "title" in current_subtask
+            and "description" in current_subtask
+        ):
             subtasks.append(current_subtask)
-            
+
         return subtasks
 
     async def __call__(
-        self,
-        state: AgentGraphState,
-        config: Optional[RunnableConfig] = None
+        self, state: AgentGraphState, config: Optional[RunnableConfig] = None
     ) -> Dict[str, Any]:
         with tracer.start_as_current_span(
             "graph.node.task_division",
-            attributes={
-                "node_id": self.node_id,
-                "task_id": state.task_id
-            },
+            attributes={"node_id": self.node_id, "task_id": state.task_id},
         ):
-            logger.info(f"TaskDivisionNode '{self.node_id}' execution started. Task ID: {state.task_id}")
+            logger.info(
+                f"TaskDivisionNode '{self.node_id}' execution started. Task ID: {state.task_id}"
+            )
             await self.notification_service.broadcast_to_task(
                 state.task_id,
-                StatusUpdateMessage(task_id=state.task_id, status="node_executing", detail=f"Node '{self.node_id}' (Task Division) started.", current_node=self.node_id)
+                StatusUpdateMessage(
+                    task_id=state.task_id,
+                    status="node_executing",
+                    detail=f"Node '{self.node_id}' (Task Division) started.",
+                    current_node=self.node_id,
+                ),
             )
 
             error_message: Optional[str] = None
             subtasks: List[Dict[str, Any]] = []
 
             try:
-                                     
                 division_prompt = self._construct_prompt(state)
-                logger.debug(f"Node '{self.node_id}' (Task: {state.task_id}): Division prompt constructed.")
+                logger.debug(
+                    f"Node '{self.node_id}' (Task: {state.task_id}): Division prompt constructed."
+                )
 
-                                                 
                 full_response = await self.llm_client.generate_response(
                     messages=[{"role": "user", "content": division_prompt}],
                     model_name=self.model_name,
                     temperature=self.temperature,
-                    max_tokens=1000                    
+                    max_tokens=1000,
                 )
-                logger.debug(f"Node '{self.node_id}' (Task: {state.task_id}): LLM response received.")
+                logger.debug(
+                    f"Node '{self.node_id}' (Task: {state.task_id}): LLM response received."
+                )
 
-                                                        
                 subtasks = self._parse_subtasks(full_response)
 
                 if not subtasks:
-                    logger.warning(f"Node '{self.node_id}' (Task: {state.task_id}): No subtasks could be parsed from LLM response.")
+                    logger.warning(
+                        f"Node '{self.node_id}' (Task: {state.task_id}): No subtasks could be parsed from LLM response."
+                    )
                     error_message = "Failed to divide task into subtasks."
                 else:
-                    logger.info(f"Node '{self.node_id}' (Task: {state.task_id}): Successfully divided task into {len(subtasks)} subtasks.")
-                    
-                                                    
+                    logger.info(
+                        f"Node '{self.node_id}' (Task: {state.task_id}): Successfully divided task into {len(subtasks)} subtasks."
+                    )
+
                     await self.notification_service.broadcast_to_task(
                         state.task_id,
                         IntermediateResultMessage(
                             task_id=state.task_id,
                             node_id=self.node_id,
                             result_step_name="subtasks_created",
-                            data={"subtask_count": len(subtasks), "subtasks": subtasks}
-                        )
+                            data={"subtask_count": len(subtasks), "subtasks": subtasks},
+                        ),
                     )
 
             except Exception as e:
-                logger.error(f"Node '{self.node_id}' (Task: {state.task_id}): Error during task division: {e}", exc_info=True)
+                logger.error(
+                    f"Node '{self.node_id}' (Task: {state.task_id}): Error during task division: {e}",
+                    exc_info=True,
+                )
                 error_message = f"Error in TaskDivisionNode '{self.node_id}': {e}"
                 subtasks = []
 
-                                        
-                                                                 
             if not state.dynamic_data:
                 state.dynamic_data = {}
-            
+
             state.dynamic_data["subtasks"] = subtasks
             state.dynamic_data["current_subtask_index"] = 0 if subtasks else None
-            
+
             await self.notification_service.broadcast_to_task(
                 state.task_id,
                 StatusUpdateMessage(
-                    task_id=state.task_id, 
-                    status="node_completed", 
-                    detail=f"Node '{self.node_id}' (Task Division) finished. Created {len(subtasks)} subtasks.", 
-                    current_node=self.node_id, 
-                    next_node="task_complexity_evaluator"
-                )
+                    task_id=state.task_id,
+                    status="node_completed",
+                    detail=f"Node '{self.node_id}' (Task Division) finished. Created {len(subtasks)} subtasks.",
+                    current_node=self.node_id,
+                    next_node="task_complexity_evaluator",
+                ),
             )
 
             return {
                 "dynamic_data": state.dynamic_data,
                 "error_message": error_message,
-                "last_llm_output": full_response if 'full_response' in locals() else None
+                "last_llm_output": full_response
+                if "full_response" in locals()
+                else None,
             }

@@ -1,42 +1,44 @@
-import os                                               
+import os
 import re
 from typing import Any, Dict, List, Optional
 
 from langchain_core.runnables import RunnableConfig
 
 from src.utils.logger import get_logger
-from src.config.settings import get_settings                  
+from src.config.settings import get_settings
 from src.services.llm_client import LLMClient
-from src.schemas.mcp_models import AgentGraphState, Thought
-from src.services.notification_service import NotificationService     
-from src.schemas.websocket_models import StatusUpdateMessage, IntermediateResultMessage     
+from src.schemas.mcp_models import AgentGraphState
+from src.services.notification_service import NotificationService
+from src.schemas.websocket_models import StatusUpdateMessage, IntermediateResultMessage
 from opentelemetry import trace
+
 tracer = trace.get_tracer(__name__)
 
 logger = get_logger(__name__)
-settings = get_settings()                
+settings = get_settings()
+
 
 class ThoughtGeneratorNode:
     def __init__(
         self,
         llm_client: LLMClient,
-        notification_service: NotificationService,          
+        notification_service: NotificationService,
         num_thoughts: int = 3,
         max_tokens_per_thought: int = 500,
         temperature: float = 0.7,
         prompt_template_path: Optional[str] = None,
         model_name: Optional[str] = None,
-        node_id: str = "thought_generator"
+        node_id: str = "thought_generator",
     ):
         self.llm_client = llm_client
-        self.notification_service = notification_service          
+        self.notification_service = notification_service
         self.num_thoughts = num_thoughts
         self.max_tokens_per_thought = max_tokens_per_thought
         self.temperature = temperature
         self.prompt_template_path = prompt_template_path
         self.model_name = model_name
         self.node_id = node_id
-        self.prompt_template_str = self._load_prompt_template_if_path_exists()          
+        self.prompt_template_str = self._load_prompt_template_if_path_exists()
         logger.info(
             f"ThoughtGeneratorNode '{self.node_id}' initialized. Num thoughts: {self.num_thoughts}. "
             f"NotificationService injected: {'Yes' if notification_service else 'No'}. "
@@ -46,20 +48,26 @@ class ThoughtGeneratorNode:
     def _load_prompt_template_if_path_exists(self) -> Optional[str]:
         if not self.prompt_template_path:
             return None
-        base_prompt_dir = getattr(settings, 'PROMPT_TEMPLATE_DIR', 'config/prompts')
+        base_prompt_dir = getattr(settings, "PROMPT_TEMPLATE_DIR", "config/prompts")
         if os.path.isabs(self.prompt_template_path):
             full_path = self.prompt_template_path
         else:
             full_path = os.path.join(base_prompt_dir, self.prompt_template_path)
         try:
-            with open(full_path, 'r', encoding='utf-8') as f:
-                logger.debug(f"Successfully loaded prompt template from: {full_path} for node '{self.node_id}'")
+            with open(full_path, "r", encoding="utf-8") as f:
+                logger.debug(
+                    f"Successfully loaded prompt template from: {full_path} for node '{self.node_id}'"
+                )
                 return f.read()
         except FileNotFoundError:
-            logger.warning(f"Prompt template file not found for ThoughtGeneratorNode '{self.node_id}': {full_path}. Using default internal prompt.")
-            return None                                    
+            logger.warning(
+                f"Prompt template file not found for ThoughtGeneratorNode '{self.node_id}': {full_path}. Using default internal prompt."
+            )
+            return None
         except Exception as e:
-            logger.error(f"Error loading prompt template from {full_path} for node '{self.node_id}': {e}. Using default internal prompt.")
+            logger.error(
+                f"Error loading prompt template from {full_path} for node '{self.node_id}': {e}. Using default internal prompt."
+            )
             return None
 
     def _construct_prompt(self, state: AgentGraphState) -> str:
@@ -69,52 +77,67 @@ class ThoughtGeneratorNode:
             if parent_thought:
                 parent_thought_content = parent_thought.content
 
-                                                              
         sibling_thoughts_summary_parts = []
-        if parent_thought_content != "N/A (Initial thought generation)" and state.current_best_thought_id:
+        if (
+            parent_thought_content != "N/A (Initial thought generation)"
+            and state.current_best_thought_id
+        ):
             for t in state.thoughts:
-                if t.parent_id == state.current_best_thought_id and t.status == "evaluated" and t.evaluation_score is not None:
-                    sibling_thoughts_summary_parts.append(f"Sibling Thought (ID: {t.id}, Score: {t.evaluation_score:.2f}): {t.content[:100]}...")         
-                elif t.parent_id == state.current_best_thought_id and t.status == "evaluation_failed":
-                    sibling_thoughts_summary_parts.append(f"Sibling Thought (ID: {t.id}, Status: evaluation_failed): {t.content[:100]}...")
+                if (
+                    t.parent_id == state.current_best_thought_id
+                    and t.status == "evaluated"
+                    and t.evaluation_score is not None
+                ):
+                    sibling_thoughts_summary_parts.append(
+                        f"Sibling Thought (ID: {t.id}, Score: {t.evaluation_score:.2f}): {t.content[:100]}..."
+                    )
+                elif (
+                    t.parent_id == state.current_best_thought_id
+                    and t.status == "evaluation_failed"
+                ):
+                    sibling_thoughts_summary_parts.append(
+                        f"Sibling Thought (ID: {t.id}, Status: evaluation_failed): {t.content[:100]}..."
+                    )
 
-        sibling_thoughts_summary = "\n".join(sibling_thoughts_summary_parts) if sibling_thoughts_summary_parts else "No previously explored sibling thoughts from this parent."
+        sibling_thoughts_summary = (
+            "\n".join(sibling_thoughts_summary_parts)
+            if sibling_thoughts_summary_parts
+            else "No previously explored sibling thoughts from this parent."
+        )
 
         if self.prompt_template_str:
-                             
-                                                                            
-                                                         
             from langchain_core.prompts import PromptTemplate
-                                                                   
-                               
-            try:
-                                                 
-                 prompt_data = {
-                     "original_input": state.original_input,
-                     "parent_thought_content": parent_thought_content,
-                     "sibling_thoughts_summary": sibling_thoughts_summary,
-                     "num_thoughts": self.num_thoughts,
-                     "search_depth": state.search_depth,
-                     "max_search_depth": state.max_search_depth,
-                     "error_message": (
-                           f"Current Error (if any, try to overcome or sidestep this): {state.error_message}"
-                           if state.error_message else ""
-                       ),
-                 }
-                                                
-                                                         
-                                                                             
-                                                                                                        
-                 template = PromptTemplate(template=self.prompt_template_str, input_variables=list(prompt_data.keys()))
-                 return template.format(**prompt_data)
-            except KeyError as ke:
-                 logger.error(f"Missing key for prompt template in ThoughtGeneratorNode '{self.node_id}': {ke}. Falling back to default internal prompt.")
-                                             
-            except Exception as e:
-                 logger.error(f"Error formatting prompt template in ThoughtGeneratorNode '{self.node_id}': {e}. Falling back to default internal prompt.")
-                           
 
-                                        
+            try:
+                prompt_data = {
+                    "original_input": state.original_input,
+                    "parent_thought_content": parent_thought_content,
+                    "sibling_thoughts_summary": sibling_thoughts_summary,
+                    "num_thoughts": self.num_thoughts,
+                    "search_depth": state.search_depth,
+                    "max_search_depth": state.max_search_depth,
+                    "error_message": (
+                        f"Current Error (if any, try to overcome or sidestep this): {state.error_message}"
+                        if state.error_message
+                        else ""
+                    ),
+                }
+
+                template = PromptTemplate(
+                    template=self.prompt_template_str,
+                    input_variables=list(prompt_data.keys()),
+                )
+                return template.format(**prompt_data)
+            except KeyError as ke:
+                logger.error(
+                    f"Missing key for prompt template in ThoughtGeneratorNode '{self.node_id}': {ke}. Falling back to default internal prompt."
+                )
+
+            except Exception as e:
+                logger.error(
+                    f"Error formatting prompt template in ThoughtGeneratorNode '{self.node_id}': {e}. Falling back to default internal prompt."
+                )
+
         return f"""
         You are a creative and methodical problem solver. Your task is to generate a set of diverse and promising next steps (thoughts) to achieve a given goal, based on the current context.
 
@@ -150,7 +173,6 @@ class ThoughtGeneratorNode:
 
     @staticmethod
     def _extract_thoughts(raw: str) -> List[str]:
-                                              
         pattern = re.compile(
             r"""
             ^\s* # 앞 공백
@@ -170,9 +192,7 @@ class ThoughtGeneratorNode:
         return thoughts
 
     async def __call__(
-        self,
-        state: AgentGraphState,
-        config: Optional[RunnableConfig] = None
+        self, state: AgentGraphState, config: Optional[RunnableConfig] = None
     ) -> Dict[str, Any]:
         with tracer.start_as_current_span(
             "graph.node.thought_generator",
@@ -183,81 +203,123 @@ class ThoughtGeneratorNode:
                 "search_depth": state.search_depth,
             },
         ):
-            
-            logger.info(f"ThoughtGeneratorNode '{self.node_id}' execution started. Task ID: {state.task_id}")
+            logger.info(
+                f"ThoughtGeneratorNode '{self.node_id}' execution started. Task ID: {state.task_id}"
+            )
             await self.notification_service.broadcast_to_task(
                 state.task_id,
-                StatusUpdateMessage(task_id=state.task_id, status="node_executing", detail=f"Node '{self.node_id}' (Thought Generator) started.", current_node=self.node_id)
+                StatusUpdateMessage(
+                    task_id=state.task_id,
+                    status="node_executing",
+                    detail=f"Node '{self.node_id}' (Thought Generator) started.",
+                    current_node=self.node_id,
+                ),
             )
 
             error_message: Optional[str] = None
-            generated_thought_contents: List[str] = []      
+            generated_thought_contents: List[str] = []
 
             if state.search_depth >= state.max_search_depth:
                 logger.info(
                     f"Node '{self.node_id}': Max search depth ({state.max_search_depth}) reached. No new thoughts generated for task {state.task_id}."
                 )
-                             
+
                 await self.notification_service.broadcast_to_task(
                     state.task_id,
-                    StatusUpdateMessage(task_id=state.task_id, status="node_completed", detail=f"Node '{self.node_id}' finished: Max search depth reached.", current_node=self.node_id)
+                    StatusUpdateMessage(
+                        task_id=state.task_id,
+                        status="node_completed",
+                        detail=f"Node '{self.node_id}' finished: Max search depth reached.",
+                        current_node=self.node_id,
+                    ),
                 )
                 return {
                     "current_thoughts_to_evaluate": [],
-                    "error_message": "Max search depth reached."
+                    "error_message": "Max search depth reached.",
                 }
 
             try:
                 generation_prompt = self._construct_prompt(state)
-                logger.debug(f"Node '{self.node_id}' (Task: {state.task_id}): Generation prompt constructed.")
+                logger.debug(
+                    f"Node '{self.node_id}' (Task: {state.task_id}): Generation prompt constructed."
+                )
 
                 full_response = await self.llm_client.generate_response(
                     messages=[{"role": "user", "content": generation_prompt}],
                     model_name=self.model_name,
                     temperature=self.temperature,
-                    max_tokens=self.max_tokens_per_thought * self.num_thoughts                    
+                    max_tokens=self.max_tokens_per_thought * self.num_thoughts,
                 )
-                logger.debug(f"Node '{self.node_id}' (Task: {state.task_id}): LLM response received.")
+                logger.debug(
+                    f"Node '{self.node_id}' (Task: {state.task_id}): LLM response received."
+                )
 
-                generated_thought_contents = ThoughtGeneratorNode._extract_thoughts(full_response)
-                generated_thought_contents = generated_thought_contents[: self.num_thoughts]              
+                generated_thought_contents = ThoughtGeneratorNode._extract_thoughts(
+                    full_response
+                )
+                generated_thought_contents = generated_thought_contents[
+                    : self.num_thoughts
+                ]
 
                 if not generated_thought_contents:
-                    logger.warning(f"Node '{self.node_id}' (Task: {state.task_id}): LLM did not generate any valid thoughts from response: {full_response[:200]}...")
-                    error_message = f"LLM did not generate thoughts in node '{self.node_id}'."
+                    logger.warning(
+                        f"Node '{self.node_id}' (Task: {state.task_id}): LLM did not generate any valid thoughts from response: {full_response[:200]}..."
+                    )
+                    error_message = (
+                        f"LLM did not generate thoughts in node '{self.node_id}'."
+                    )
                 else:
-                                          
                     await self.notification_service.broadcast_to_task(
                         state.task_id,
                         IntermediateResultMessage(
                             task_id=state.task_id,
                             node_id=self.node_id,
                             result_step_name="thoughts_generated",
-                            data={"generated_count": len(generated_thought_contents), "thoughts_preview": [t[:100]+"..." for t in generated_thought_contents]}
-                        )
+                            data={
+                                "generated_count": len(generated_thought_contents),
+                                "thoughts_preview": [
+                                    t[:100] + "..." for t in generated_thought_contents
+                                ],
+                            },
+                        ),
                     )
 
             except Exception as e:
-                logger.error(f"Node '{self.node_id}' (Task: {state.task_id}): Error during thought generation: {e}", exc_info=True)
+                logger.error(
+                    f"Node '{self.node_id}' (Task: {state.task_id}): Error during thought generation: {e}",
+                    exc_info=True,
+                )
                 error_message = f"Error in ThoughtGeneratorNode '{self.node_id}': {e}"
-                generated_thought_contents = []                 
+                generated_thought_contents = []
 
             newly_added_thought_ids: List[str] = []
-            if generated_thought_contents:                   
+            if generated_thought_contents:
                 for content in generated_thought_contents:
-                    new_thought = state.add_thought(content=content, parent_id=state.current_best_thought_id)                            
+                    new_thought = state.add_thought(
+                        content=content, parent_id=state.current_best_thought_id
+                    )
                     newly_added_thought_ids.append(new_thought.id)
                 if newly_added_thought_ids:
-                    logger.info(f"Node '{self.node_id}' (Task: {state.task_id}): Generated and added {len(newly_added_thought_ids)} new thoughts to state.")
+                    logger.info(
+                        f"Node '{self.node_id}' (Task: {state.task_id}): Generated and added {len(newly_added_thought_ids)} new thoughts to state."
+                    )
 
             await self.notification_service.broadcast_to_task(
                 state.task_id,
-                StatusUpdateMessage(task_id=state.task_id, status="node_completed", detail=f"Node '{self.node_id}' (Thought Generator) finished. Generated {len(newly_added_thought_ids)} thoughts.", current_node=self.node_id, next_node="state_evaluator")              
+                StatusUpdateMessage(
+                    task_id=state.task_id,
+                    status="node_completed",
+                    detail=f"Node '{self.node_id}' (Thought Generator) finished. Generated {len(newly_added_thought_ids)} thoughts.",
+                    current_node=self.node_id,
+                    next_node="state_evaluator",
+                ),
             )
 
             return {
-                "thoughts": state.thoughts,                      
+                "thoughts": state.thoughts,
                 "current_thoughts_to_evaluate": newly_added_thought_ids,
-                "last_llm_output": generated_thought_contents if generated_thought_contents else (error_message or "No thoughts generated."),
-                "error_message": error_message
+                "last_llm_output": generated_thought_contents
+                if generated_thought_contents
+                else (error_message or "No thoughts generated."),
+                "error_message": error_message,
             }

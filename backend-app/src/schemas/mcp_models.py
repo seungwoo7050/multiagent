@@ -4,114 +4,132 @@ from typing import Any, Dict, List, Optional, Union
 
 from src.utils.ids import generate_uuid
 
-                                        
 
 class LLMInputMessage(msgspec.Struct, forbid_unknown_fields=True):
     """LLM 입력 메시지 구조체 (msgspec)"""
-    role: str                                    
-    content: Union[str, List[Dict[str, Any]]]                  
+
+    role: str
+    content: Union[str, List[Dict[str, Any]]]
+
 
 class LLMParameters(msgspec.Struct, omit_defaults=True, forbid_unknown_fields=True):
     """LLM 호출 파라미터 구조체 (msgspec)"""
+
     max_tokens: Optional[int] = None
     temperature: Optional[float] = None
     top_p: Optional[float] = None
     stop_sequences: Optional[List[str]] = None
-                                          
-class LLMInputContext(msgspec.Struct, tag='llm_input', omit_defaults=True, forbid_unknown_fields=True):
+
+
+class LLMInputContext(
+    msgspec.Struct, tag="llm_input", omit_defaults=True, forbid_unknown_fields=True
+):
     """LLM 입력을 위한 MCP 컨텍스트 (msgspec)"""
-    model: str               
-    context_id: str = msgspec.field(default_factory=lambda: generate_uuid())             
+
+    model: str
+    context_id: str = msgspec.field(default_factory=lambda: generate_uuid())
     timestamp: float = msgspec.field(default_factory=time.time)
     metadata: Dict[str, Any] = msgspec.field(default_factory=dict)
-    version: str = '1.0.0'
+    version: str = "1.0.0"
 
-    prompt: Optional[str] = None                                        
-    messages: Optional[List[LLMInputMessage]] = None                    
-    parameters: Optional[LLMParameters] = None              
-    use_cache: bool = True           
-    retry_on_failure: bool = True              
+    prompt: Optional[str] = None
+    messages: Optional[List[LLMInputMessage]] = None
+    parameters: Optional[LLMParameters] = None
+    use_cache: bool = True
+    retry_on_failure: bool = True
+
 
 class LLMOutputChoice(msgspec.Struct, forbid_unknown_fields=True):
     """LLM 응답 선택지 구조체 (msgspec)"""
-    text: Optional[str] = None          
+
+    text: Optional[str] = None
     index: int = 0
-    finish_reason: Optional[str] = None                                        
+    finish_reason: Optional[str] = None
+
 
 class LLMUsage(msgspec.Struct, omit_defaults=True, forbid_unknown_fields=True):
     """LLM 토큰 사용량 구조체 (msgspec)"""
+
     prompt_tokens: Optional[int] = None
     completion_tokens: Optional[int] = None
     total_tokens: Optional[int] = None
 
-class LLMOutputContext(msgspec.Struct, tag='llm_output', omit_defaults=True, forbid_unknown_fields=True):
+
+class LLMOutputContext(
+    msgspec.Struct, tag="llm_output", omit_defaults=True, forbid_unknown_fields=True
+):
     """LLM 응답을 위한 MCP 컨텍스트 (msgspec)"""
-    success: bool               
+
+    success: bool
     context_id: str = msgspec.field(default_factory=lambda: generate_uuid())
     timestamp: float = msgspec.field(default_factory=time.time)
     metadata: Dict[str, Any] = msgspec.field(default_factory=dict)
-    version: str = '1.0.0'
+    version: str = "1.0.0"
 
-    result_text: Optional[str] = None                                        
-    choices: Optional[List[LLMOutputChoice]] = None                 
-    usage: Optional[LLMUsage] = None            
-    error_message: Optional[str] = None              
-    model_used: Optional[str] = None                
+    result_text: Optional[str] = None
+    choices: Optional[List[LLMOutputChoice]] = None
+    usage: Optional[LLMUsage] = None
+    error_message: Optional[str] = None
+    model_used: Optional[str] = None
 
-class ConversationTurn(msgspec.Struct, tag='conversation_turn', omit_defaults=True, forbid_unknown_fields=True):
+
+class ConversationTurn(
+    msgspec.Struct,
+    tag="conversation_turn",
+    omit_defaults=True,
+    forbid_unknown_fields=True,
+):
     """대화 턴을 저장하기 위한 구조체"""
-    role: str                        
+
+    role: str
     content: str
     timestamp: float = msgspec.field(default_factory=time.time)
     metadata: Optional[Dict[str, Any]] = None
 
+
 class Thought(msgspec.Struct, forbid_unknown_fields=True):
     """ToT: 개별 생각 또는 추론 단계"""
-    content: str         
+
+    content: str
     id: str = msgspec.field(default_factory=generate_uuid)
-    parent_id: Optional[str] = None                     
-    evaluation_score: Optional[float] = None        
-    status: str = "generated"                                                    
-    metadata: Dict[str, Any] = msgspec.field(default_factory=dict)                      
+    parent_id: Optional[str] = None
+    evaluation_score: Optional[float] = None
+    status: str = "generated"
+    metadata: Dict[str, Any] = msgspec.field(default_factory=dict)
+
 
 class AgentGraphState(msgspec.Struct, omit_defaults=True, forbid_unknown_fields=True):
     """
     LangGraph StateGraph에서 사용될 상태 객체.
     ToT 및 GenericLLMNode 워크플로우를 지원합니다.
     """
-    task_id: str                  
-    original_input: Any                    
-    next_action: Optional[str] = None     
-    current_iteration: int = 0                               
-    
-               
-    thoughts: List[Thought] = msgspec.field(default_factory=list)               
-    current_thoughts_to_evaluate: List[str] = msgspec.field(default_factory=list)                       
-    current_best_thought_id: Optional[str] = None                    
-    search_depth: int = 0                
-    max_search_depth: int = 5                
-    
-                                     
+
+    task_id: str
+    original_input: Any
+    next_action: Optional[str] = None
+    current_iteration: int = 0
+
+    thoughts: List[Thought] = msgspec.field(default_factory=list)
+    current_thoughts_to_evaluate: List[str] = msgspec.field(default_factory=list)
+    current_best_thought_id: Optional[str] = None
+    search_depth: int = 0
+    max_search_depth: int = 5
+
     last_llm_input: Optional[Union[str, List[Dict[str, Any]]]] = None
     last_llm_output: Optional[str] = None
-    scratchpad: str = ""                               
-    tool_call_history: List[Dict] = msgspec.field(default_factory=list)              
-    
-                   
-    next_node_override: Optional[str] = None                          
-    final_answer: Optional[str] = None        
-    error_message: Optional[str] = None              
-    
-                                    
-                               
-                                                                                 
+    scratchpad: str = ""
+    tool_call_history: List[Dict] = msgspec.field(default_factory=list)
+
+    next_node_override: Optional[str] = None
+    final_answer: Optional[str] = None
+    error_message: Optional[str] = None
+
     dynamic_data: Dict[str, Any] = msgspec.field(default_factory=dict)
-    
-                 
+
     context_id: str = msgspec.field(default_factory=generate_uuid)
     timestamp: float = msgspec.field(default_factory=time.time)
-    metadata: Dict[str, Any] = msgspec.field(default_factory=dict)                  
-    version: str = '1.0.0'           
+    metadata: Dict[str, Any] = msgspec.field(default_factory=dict)
+    version: str = "1.0.0"
 
     def get_thought_by_id(self, thought_id: str) -> Optional[Thought]:
         """ID로 특정 생각을 찾습니다."""
@@ -120,13 +138,20 @@ class AgentGraphState(msgspec.Struct, omit_defaults=True, forbid_unknown_fields=
                 return thought
         return None
 
-    def add_thought(self, content: str, parent_id: Optional[str] = None, metadata: Optional[Dict[str,Any]] = None) -> Thought:
+    def add_thought(
+        self,
+        content: str,
+        parent_id: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Thought:
         """새로운 생각을 추가합니다."""
-        new_thought = Thought(content=content, parent_id=parent_id, metadata=metadata or {})
+        new_thought = Thought(
+            content=content, parent_id=parent_id, metadata=metadata or {}
+        )
         self.thoughts.append(new_thought)
         return new_thought
 
-    
+
 """
 AgentGraphState 설명:
 task_id: 현재 그래프가 처리 중인 작업의 ID입니다.
