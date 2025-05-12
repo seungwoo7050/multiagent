@@ -56,7 +56,6 @@ class BaseTool(LangchainBaseTool, abc.ABC):
             f"Default _arun called for {self.name}, will likely execute _run in executor."
         )
 
-
     @classmethod
     def get_empty_args_schema(cls, name: str = "EmptyArgsSchema") -> Type[BaseModel]:
         """Create an empty argument schema."""
